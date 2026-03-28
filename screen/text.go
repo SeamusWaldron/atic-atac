@@ -154,6 +154,35 @@ func (b *Buffer) DrawChar(x, y int, ch byte) {
 	}
 }
 
+// DrawCharFrom draws an 8×8 character glyph from arbitrary data at pixel position (x, y).
+// charData must be 8 bytes. Uses OR mode.
+func (b *Buffer) DrawCharFrom(x, y int, charData []byte) {
+	if len(charData) < 8 {
+		return
+	}
+	col := x >> 3
+	shift := uint(x & 7)
+	for row := 0; row < 8; row++ {
+		py := y + row
+		if py < 0 || py >= ScreenHeightPx {
+			continue
+		}
+		addr := int(yTable[py]) + col
+		if shift == 0 {
+			if addr >= 0 && addr < DisplaySize {
+				b.Pixels[addr] |= charData[row]
+			}
+		} else {
+			if addr >= 0 && addr < DisplaySize {
+				b.Pixels[addr] |= charData[row] >> shift
+			}
+			if addr+1 >= 0 && addr+1 < DisplaySize {
+				b.Pixels[addr+1] |= charData[row] << (8 - shift)
+			}
+		}
+	}
+}
+
 // DrawString draws a string at pixel position (x, y) into the buffer.
 // Each character is 8 pixels wide.
 func (b *Buffer) DrawString(x, y int, s string) {

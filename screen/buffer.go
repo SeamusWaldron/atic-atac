@@ -209,6 +209,109 @@ func (b *Buffer) DrawSpriteOR(x, y int, data []byte) {
 	}
 }
 
+// DrawSpriteWideOR draws an N-byte-wide sprite at pixel position (x, y) using OR mode.
+// Data format: widthBytes × height bytes of pixel data (no header — caller provides width and height).
+// Draws UPWARD from y (entity Y = bottom of sprite), matching the 2-byte sprites.
+func (b *Buffer) DrawSpriteWideOR(x, y, widthBytes, height int, data []byte) {
+	if len(data) < widthBytes*height {
+		return
+	}
+	col := x >> 3
+	shift := uint(x & 7)
+
+	for row := 0; row < height; row++ {
+		py := y - row
+		if py < 0 || py >= ScreenHeightPx {
+			continue
+		}
+		base := int(yTable[py]) + col
+		rowData := data[row*widthBytes : row*widthBytes+widthBytes]
+
+		if shift == 0 {
+			for c := 0; c < widthBytes; c++ {
+				a := base + c
+				if a >= 0 && a < DisplaySize {
+					b.Pixels[a] |= rowData[c]
+				}
+			}
+		} else {
+			// First byte: high bits of first data byte
+			a := base
+			if a >= 0 && a < DisplaySize {
+				b.Pixels[a] |= rowData[0] >> shift
+			}
+			// Middle bytes: low bits of prev + high bits of current
+			for c := 1; c < widthBytes; c++ {
+				a = base + c
+				if a >= 0 && a < DisplaySize {
+					b.Pixels[a] |= (rowData[c-1] << (8 - shift)) | (rowData[c] >> shift)
+				}
+			}
+			// Last byte: low bits of last data byte
+			a = base + widthBytes
+			if a >= 0 && a < DisplaySize {
+				b.Pixels[a] |= rowData[widthBytes-1] << (8 - shift)
+			}
+		}
+	}
+}
+
+// DrawSpriteWideXOR draws an N-byte-wide sprite using XOR mode.
+func (b *Buffer) DrawSpriteWideXOR(x, y, widthBytes, height int, data []byte) {
+	if len(data) < widthBytes*height {
+		return
+	}
+	col := x >> 3
+	shift := uint(x & 7)
+
+	for row := 0; row < height; row++ {
+		py := y - row
+		if py < 0 || py >= ScreenHeightPx {
+			continue
+		}
+		base := int(yTable[py]) + col
+		rowData := data[row*widthBytes : row*widthBytes+widthBytes]
+
+		if shift == 0 {
+			for c := 0; c < widthBytes; c++ {
+				a := base + c
+				if a >= 0 && a < DisplaySize {
+					b.Pixels[a] ^= rowData[c]
+				}
+			}
+		} else {
+			a := base
+			if a >= 0 && a < DisplaySize {
+				b.Pixels[a] ^= rowData[0] >> shift
+			}
+			for c := 1; c < widthBytes; c++ {
+				a = base + c
+				if a >= 0 && a < DisplaySize {
+					b.Pixels[a] ^= (rowData[c-1] << (8 - shift)) | (rowData[c] >> shift)
+				}
+			}
+			a = base + widthBytes
+			if a >= 0 && a < DisplaySize {
+				b.Pixels[a] ^= rowData[widthBytes-1] << (8 - shift)
+			}
+		}
+	}
+}
+
+// SetAttrGrid writes a rectangular grid of attribute bytes at (col, row) in character cells.
+// data is a flat array of w*h attribute bytes, row-major order.
+func (b *Buffer) SetAttrGrid(col, row int, data []byte, w, h int) {
+	for r := 0; r < h; r++ {
+		for c := 0; c < w; c++ {
+			ar := row + r
+			ac := col + c
+			if ar >= 0 && ar < ScreenRows && ac >= 0 && ac < ScreenCols {
+				b.Attrs[ar*ScreenCols+ac] = data[r*w+c]
+			}
+		}
+	}
+}
+
 // DrawLine draws a line from (x0,y0) to (x1,y1) using Bresenham's algorithm.
 // Uses OR mode, matching the original plot_l_h which uses OR (HL).
 func (b *Buffer) DrawLine(x0, y0, x1, y1 int) {
