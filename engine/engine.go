@@ -984,8 +984,19 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 		ow, oh, op := rotateCW(w, h, pixels)
 		buf.DrawSpriteWideOR(x, y, ow, oh, op)
 
-	case 3: // 90° CCW
+	case 3: // 90° CCW + horizontal flip (right wall doors)
 		ow, oh, op := rotateCCW(w, h, pixels)
+		// Horizontal flip: reverse bits and byte order per row
+		for row := 0; row < oh; row++ {
+			for col := 0; col < ow/2; col++ {
+				ri := ow - 1 - col
+				op[row*ow+col], op[row*ow+ri] = reverseBits(op[row*ow+ri]), reverseBits(op[row*ow+col])
+			}
+			if ow%2 == 1 {
+				mid := ow / 2
+				op[row*ow+mid] = reverseBits(op[row*ow+mid])
+			}
+		}
 		buf.DrawSpriteWideOR(x, y, ow, oh, op)
 
 	case 4: // 180°: draw upward from Y, rows in reverse order
