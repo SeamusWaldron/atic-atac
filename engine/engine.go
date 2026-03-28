@@ -980,17 +980,14 @@ func (g *GameEnv) drawHUD() {
 	// X=200 = col 25, gives 56px (7 chars) before screen edge
 	const textX = 200
 
-	// TIME (magenta label, white value) — short format to fit panel
-	g.buf.FillAttrArea(25, 3, 6, 1, 0x43)
-	g.buf.DrawString(textX, 24, "TIME")
+	// The scroll border already contains TIME and SCORE labels baked into
+	// the panel character grid (rows 7-8). Just draw the values.
+	// Row 3 = Y 24: clock value, Row 4 = Y 32: empty
+	// Row 5 = Y 40: score value, Row 6 = Y 48: empty
+	g.buf.FillAttrArea(25, 3, 6, 1, 0x47) // bright white
+	g.buf.DrawString(textX, 24, formatClockShort(g.clockM, g.clockS))
 	g.buf.FillAttrArea(25, 4, 6, 1, 0x47)
-	g.buf.DrawString(textX, 32, formatClockShort(g.clockM, g.clockS))
-
-	// SCORE (magenta label, white value)
-	g.buf.FillAttrArea(25, 5, 6, 1, 0x43)
-	g.buf.DrawString(textX, 40, "SCORE")
-	g.buf.FillAttrArea(25, 6, 6, 1, 0x47)
-	g.buf.DrawString(textX, 48, formatBCD(g.score))
+	g.buf.DrawString(textX, 32, formatBCD(g.score))
 
 	// Chicken energy bar (yellow, rows 7-11 = Y 56-87)
 	g.buf.FillAttrArea(25, 7, 6, 5, 0x46)
