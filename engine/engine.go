@@ -32,6 +32,8 @@ type GameEnv struct {
 	playerDir   int
 	walkCounter int
 	moving      bool
+	lastDX      int // movement delta from last frame (for weapon direction)
+	lastDY      int
 
 	// Entities
 	entities   *entity.Pool
@@ -259,6 +261,8 @@ func (g *GameEnv) movePlayer(act action.Action) {
 
 	if g.moving {
 		g.walkCounter++
+		g.lastDX = dx
+		g.lastDY = dy
 	}
 }
 
@@ -400,18 +404,39 @@ func (g *GameEnv) fireWeapon() {
 	g.weaponX = int(g.playerX)
 	g.weaponY = int(g.playerY)
 	g.weaponFrame = 0
-	g.weaponTimer = 30 // weapon lives for 30 frames
+	g.weaponTimer = 0x30 // $30 = 48 frames (original at $8181)
 
-	speed := 4
-	switch g.playerDir {
-	case data.DirUp:
-		g.weaponDX, g.weaponDY = 0, -speed
-	case data.DirDown:
-		g.weaponDX, g.weaponDY = 0, speed
-	case data.DirLeft:
-		g.weaponDX, g.weaponDY = -speed, 0
-	case data.DirRight:
-		g.weaponDX, g.weaponDY = speed, 0
+	// Original throw_weapon ($817C): if player is moving, weapon velocity
+	// is derived from player velocity — $04 per active axis. This allows
+	// diagonal firing when moving diagonally. If stationary, fires in the
+	// facing direction (cardinal only).
+	const speed = 4
+	if g.lastDX != 0 || g.lastDY != 0 {
+		// Moving: inherit direction from player velocity (diagonal possible)
+		g.weaponDX = 0
+		g.weaponDY = 0
+		if g.lastDX > 0 {
+			g.weaponDX = speed
+		} else if g.lastDX < 0 {
+			g.weaponDX = -speed
+		}
+		if g.lastDY > 0 {
+			g.weaponDY = speed
+		} else if g.lastDY < 0 {
+			g.weaponDY = -speed
+		}
+	} else {
+		// Stationary: fire in facing direction (cardinal only)
+		switch g.playerDir {
+		case data.DirUp:
+			g.weaponDX, g.weaponDY = 0, -speed
+		case data.DirDown:
+			g.weaponDX, g.weaponDY = 0, speed
+		case data.DirLeft:
+			g.weaponDX, g.weaponDY = -speed, 0
+		case data.DirRight:
+			g.weaponDX, g.weaponDY = speed, 0
+		}
 	}
 }
 
@@ -425,13 +450,16 @@ func (g *GameEnv) updateWeapon() {
 	g.weaponFrame++
 	g.weaponTimer--
 
-	// Check wall bounds
+	// Bounce off walls (original at $825D/$824B inverts velocity on wall hit)
 	ra := data.RoomAttrs[g.room]
 	style := data.RoomStyles[ra.Style]
-	if !inWallBounds(g.weaponX, roomCentreX, int(style.Width)) ||
-		!inWallBounds(g.weaponY, roomCentreY, int(style.Height)) {
-		g.weaponActive = false
-		return
+	if !inWallBounds(g.weaponX, roomCentreX, int(style.Width)) {
+		g.weaponDX = -g.weaponDX
+		g.weaponX += g.weaponDX
+	}
+	if !inWallBounds(g.weaponY, roomCentreY, int(style.Height)) {
+		g.weaponDY = -g.weaponDY
+		g.weaponY += g.weaponDY
 	}
 
 	if g.weaponTimer <= 0 {
