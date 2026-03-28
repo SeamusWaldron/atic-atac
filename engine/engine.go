@@ -961,61 +961,64 @@ func (g *GameEnv) drawRoom() {
 }
 
 func (g *GameEnv) drawHUD() {
-	// Draw scroll border from panel character data
+	// The panel character grid already contains decorative text:
+	//   Row 1:  "Scroll" (chars $4F-$53)
+	//   Row 7:  "TIME" (chars $59-$5C)
+	//   Row 8:  ":" colon (char $5D)
+	//   Row 9:  "SCORE" (chars $49-$4E)
+	//   Row 18-23: Bottom rosette
+	// Game code renders values and sprites into the empty interior rows.
+
 	g.drawScrollBorder()
 
-	// Set panel attributes — invert room colour for scroll border
+	// Base panel colour from room attribute (inverted)
 	panelAttr := g.panelColour()
 	g.buf.FillAttrArea(24, 0, 8, 24, panelAttr)
 
-	// Interior area of the scroll is roughly cols 25-30, rows 3-17.
-	// Layout from original (reference screenshot):
-	//   Row 3-4: TIME label + value
-	//   Row 5-6: SCORE label + value
-	//   Row 7-11: Chicken energy bar (large, yellow)
-	//   Row 12-14: Lives (3 character sprites)
-	//   Row 15-17: Inventory (3 item slots)
+	// Attribute overrides for specific regions (from Z80 $A240):
+	//   Row 7  (Y=56):  "TIME" label  → bright magenta $43
+	//   Row 8  (Y=64):  time value    → bright white $47
+	//   Row 9  (Y=72):  "SCORE" label → bright cyan $45
+	//   Row 10 (Y=80):  score value   → bright white $47
+	//   Row 11-14 (Y=88): chicken     → bright yellow $46
+	//   Row 15-17 (Y=120): lives      → bright white $47
+	g.buf.FillAttrArea(25, 7, 6, 1, 0x43) // TIME label: magenta
+	g.buf.FillAttrArea(25, 8, 6, 1, 0x47) // time value: white
+	g.buf.FillAttrArea(25, 9, 6, 1, 0x45) // SCORE label: cyan
+	g.buf.FillAttrArea(25, 10, 6, 1, 0x47) // score value: white
+	g.buf.FillAttrArea(25, 11, 6, 4, 0x46) // chicken: yellow
+	g.buf.FillAttrArea(25, 15, 6, 3, 0x47) // lives: white
 
-	// Interior X starts at pixel 200 (col 25), text offset to 208 (col 26)
-	// X=200 = col 25, gives 56px (7 chars) before screen edge
-	const textX = 200
+	// Time digits (row 8, Y=64)
+	g.buf.DrawString(200, 64, formatClockShort(g.clockM, g.clockS))
 
-	// The scroll border already contains TIME and SCORE labels baked into
-	// the panel character grid (rows 7-8). Just draw the values.
-	// Row 3 = Y 24: clock value, Row 4 = Y 32: empty
-	// Row 5 = Y 40: score value, Row 6 = Y 48: empty
-	g.buf.FillAttrArea(25, 3, 6, 1, 0x47) // bright white
-	g.buf.DrawString(textX, 24, formatClockShort(g.clockM, g.clockS))
-	g.buf.FillAttrArea(25, 4, 6, 1, 0x47)
-	g.buf.DrawString(textX, 32, formatBCD(g.score))
+	// Score digits (row 10, Y=80)
+	g.buf.DrawString(200, 80, formatBCD(g.score))
 
-	// Chicken energy bar (yellow, rows 7-11 = Y 56-87)
-	g.buf.FillAttrArea(25, 7, 6, 5, 0x46)
+	// Chicken energy bar (rows 11-14, Y=88-119)
 	chickenRows := int(g.energy) * 30 / int(InitialEnergy)
 	if chickenRows > 30 {
 		chickenRows = 30
 	}
 	if chickenRows > 0 {
 		startRow := 30 - chickenRows
-		// Y position: bottom of chicken area = row 11 bottom = Y 95
-		g.buf.DrawSpriteWideOR(200, 95, 6, chickenRows,
+		g.buf.DrawSpriteWideOR(200, 119, 6, chickenRows,
 			data.ChickenFull[startRow*6:])
 	}
 
-	// Lives (bright white, rows 12-14 = Y 96-111)
-	g.buf.FillAttrArea(25, 12, 6, 3, 0x47)
+	// Lives (rows 15-17, Y=120-143) — up to 3 character sprites
 	for i := byte(0); i < g.lives && i < 3; i++ {
-		lx := 204 + int(i)*16
+		lx := 200 + int(i)*16
 		sprites := data.CharacterSprites(g.character)
-		g.buf.DrawSpriteXOR(lx, 115, sprites[data.DirDown][0])
+		g.buf.DrawSpriteXOR(lx, 139, sprites[data.DirDown][0])
 	}
 
-	// Inventory slots (rows 15-17 = Y 120-135)
+	// Inventory slots (rows 5-6, Y=40-55)
+	g.buf.FillAttrArea(25, 5, 6, 2, 0x47)
 	for i, slot := range g.inventory {
-		ix := 204 + i*16
+		ix := 200 + i*16
 		if slot.Occupied {
-			g.buf.FillAttrArea(25+i*2, 15, 2, 2, 0x47)
-			g.buf.DrawString(ix, 120, slot.Name[:1])
+			g.buf.DrawString(ix, 44, slot.Name[:1])
 		}
 	}
 }
