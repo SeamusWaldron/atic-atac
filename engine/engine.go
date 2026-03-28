@@ -132,6 +132,9 @@ func (g *GameEnv) Reset() {
 }
 
 // SetCharacter sets the player character class and resets.
+// Character returns the current character class.
+func (g *GameEnv) Character() data.CharacterClass { return g.character }
+
 func (g *GameEnv) SetCharacter(c data.CharacterClass) {
 	g.character = c
 	g.Reset()
