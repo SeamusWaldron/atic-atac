@@ -629,28 +629,41 @@ func (g *GameEnv) drawDoors() {
 	rh := int(style.Height)
 
 	for _, d := range doors {
-		dx := int(d.X)
-		dy := int(d.Y)
+		doorX := int(d.X)
+		doorY := int(d.Y)
 
-		// Only draw doors that are on room edges (within screen area)
-		// Clamp door marker to room boundary
-		if dx < roomCentreX-rw {
-			dx = roomCentreX - rw
-		} else if dx > roomCentreX+rw {
-			dx = roomCentreX + rw
-		}
-		if dy < roomCentreY-rh {
-			dy = roomCentreY - rh
-		} else if dy > roomCentreY+rh {
-			dy = roomCentreY + rh
-		}
+		// Determine which wall the door is on and draw a gap (clear pixels)
+		// by XORing a block to erase the frame lines at the doorway.
+		const gapSize = 10
 
-		// Draw a small gap/opening marker
-		for i := -3; i <= 3; i++ {
-			g.buf.SetPixel(dx+i, dy-4)
-			g.buf.SetPixel(dx+i, dy+4)
-			g.buf.SetPixel(dx-3, dy+i)
-			g.buf.SetPixel(dx+3, dy+i)
+		onTop := doorY < roomCentreY-rh
+		onBottom := doorY > roomCentreY+rh
+		onLeft := doorX < roomCentreX-rw
+		onRight := doorX > roomCentreX+rw
+
+		if onTop || onBottom {
+			// Horizontal wall: clear a vertical gap centred on doorX
+			wallY := roomCentreY - rh
+			if onBottom {
+				wallY = roomCentreY + rh
+			}
+			for px := doorX - gapSize; px <= doorX+gapSize; px++ {
+				for dy := -3; dy <= 3; dy++ {
+					g.buf.ClearPixel(px, wallY+dy)
+				}
+			}
+		}
+		if onLeft || onRight {
+			// Vertical wall: clear a horizontal gap centred on doorY
+			wallX := roomCentreX - rw
+			if onRight {
+				wallX = roomCentreX + rw
+			}
+			for py := doorY - gapSize; py <= doorY+gapSize; py++ {
+				for dx := -3; dx <= 3; dx++ {
+					g.buf.ClearPixel(wallX+dx, py)
+				}
+			}
 		}
 	}
 }

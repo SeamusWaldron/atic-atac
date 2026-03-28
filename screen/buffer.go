@@ -73,6 +73,16 @@ func (b *Buffer) XORPixel(x, y int) {
 	b.Pixels[addr] ^= bit
 }
 
+// ClearPixel clears a single pixel at (x, y).
+func (b *Buffer) ClearPixel(x, y int) {
+	if x < 0 || x >= ScreenWidthPx || y < 0 || y >= ScreenHeightPx {
+		return
+	}
+	addr := PixelAddr(x, y)
+	bit := byte(0x80) >> uint(x&7)
+	b.Pixels[addr] &^= bit
+}
+
 // ClearPixels zeroes all pixel data.
 func (b *Buffer) ClearPixels() {
 	for i := range b.Pixels {

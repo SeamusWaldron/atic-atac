@@ -41,8 +41,8 @@ func New() *Game {
 
 // Update is called every tick (target: 50 TPS).
 func (g *Game) Update() error {
-	// Room browsing: N = next, P = previous
-	nPressed := ebiten.IsKeyPressed(ebiten.KeyN)
+	// Room browsing: F2 = next, F1 = previous (debug)
+	nPressed := ebiten.IsKeyPressed(ebiten.KeyF2)
 	if nPressed && !g.nWasPressed {
 		g.room++
 		if int(g.room) >= data.NumRooms {
@@ -52,7 +52,7 @@ func (g *Game) Update() error {
 	}
 	g.nWasPressed = nPressed
 
-	pPressed := ebiten.IsKeyPressed(ebiten.KeyP)
+	pPressed := ebiten.IsKeyPressed(ebiten.KeyF1)
 	if pPressed && !g.pWasPressed {
 		if g.room == 0 {
 			g.room = byte(data.NumRooms - 1)
