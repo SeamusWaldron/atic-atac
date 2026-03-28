@@ -3,7 +3,14 @@ package engine
 import (
 	"github.com/seamuswaldron/aticatac/action"
 	"github.com/seamuswaldron/aticatac/data"
+	"github.com/seamuswaldron/aticatac/entity"
 	"github.com/seamuswaldron/aticatac/screen"
+)
+
+// Room centre coordinates — hardcoded in the original Z80 at $8FED/$8FF8.
+const (
+	roomCentreX = 0x58
+	roomCentreY = 0x68
 )
 
 // GameEnv is the headless game engine with Step/Reset API.
@@ -17,19 +24,34 @@ type GameEnv struct {
 	energy    byte
 	score     uint32
 	character data.CharacterClass
+	frame     uint32 // global frame counter
 
-	// Player position and movement
+	// Player
 	playerX     byte
 	playerY     byte
-	playerDir   int // data.DirLeft/Right/Up/Down
-	walkCounter int // animation counter
+	playerDir   int
+	walkCounter int
 	moving      bool
+
+	// Entities
+	entities   *entity.Pool
+	spawnDelay int
+	rand       uint16 // simple PRNG
+
+	// Weapon
+	weaponActive bool
+	weaponX      int
+	weaponY      int
+	weaponDX     int
+	weaponDY     int
+	weaponFrame  int
+	weaponTimer  int
 
 	// Door system
 	roomDoors map[byte][]data.RoomDoor
-	doorTimer int // cooldown to prevent instant re-entry
+	doorTimer int
 
-	// Room rendering state
+	// Rendering
 	roomDrawn bool
 	hudDirty  bool
 }
@@ -38,6 +60,8 @@ type GameEnv struct {
 func New() *GameEnv {
 	g := &GameEnv{
 		roomDoors: data.BuildRoomDoors(),
+		entities:  entity.NewPool(),
+		rand:      0xACE1,
 	}
 	g.Reset()
 	return g
@@ -50,10 +74,14 @@ func (g *GameEnv) Reset() {
 	g.lives = InitialLives
 	g.energy = InitialEnergy
 	g.score = 0
+	g.frame = 0
 	g.roomDrawn = false
 	g.hudDirty = true
 	g.playerDir = data.DirDown
 	g.walkCounter = 0
+	g.weaponActive = false
+	g.spawnDelay = 32
+	g.entities.Clear()
 
 	ch := data.Characters[g.character]
 	g.room = ch.StartRoom
@@ -74,6 +102,8 @@ func (g *GameEnv) Step(act action.Action) StepResult {
 	switch g.state {
 	case StatePlaying:
 		g.stepPlaying(act)
+	case StateDead:
+		g.stepDead()
 	}
 
 	return StepResult{
@@ -97,10 +127,13 @@ func (g *GameEnv) ChangeRoom(room byte) {
 	g.hudDirty = true
 	g.playerX = 0x60
 	g.playerY = 0x60
+	g.spawnDelay = 32
 }
 
 // stepPlaying handles one frame of gameplay.
 func (g *GameEnv) stepPlaying(act action.Action) {
+	g.frame++
+
 	if !g.roomDrawn {
 		g.clearPlayArea()
 		g.drawRoom()
@@ -111,14 +144,34 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	// Player movement
 	g.movePlayer(act)
 
+	// Weapon
+	if act&action.Fire != 0 && !g.weaponActive {
+		g.fireWeapon()
+	}
+	g.updateWeapon()
+
+	// Creatures
+	g.spawnCreatures()
+	g.updateCreatures()
+	g.checkCreaturePlayerCollision()
+
+	// Energy drain (slow drain over time — 1 point every 32 frames)
+	if g.frame%32 == 0 && g.energy > 0 {
+		g.energy--
+		g.hudDirty = true
+	}
+
+	// Door timer
 	if g.doorTimer > 0 {
 		g.doorTimer--
 	}
 
-	// Redraw: clear play area, draw room frame, draw player sprite
+	// Render
 	g.clearPlayArea()
 	g.drawRoom()
 	g.drawDoors()
+	g.drawEntities()
+	g.drawWeapon()
 	g.drawPlayer()
 
 	if g.hudDirty {
@@ -128,42 +181,43 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	}
 }
 
-// clearPlayArea clears the 24×24 character play area (192×192 pixels).
-func (g *GameEnv) clearPlayArea() {
-	for y := 0; y < 192; y++ {
-		addr := screen.PixelAddr(0, y)
-		for col := 0; col < 24; col++ {
-			g.buf.Pixels[addr+uint16(col)] = 0
+// stepDead handles the death animation.
+func (g *GameEnv) stepDead() {
+	g.frame++
+	// Simple death pause then respawn or game over
+	if g.frame%60 == 0 {
+		if g.lives == 0 {
+			g.state = StateGameOver
+		} else {
+			g.state = StatePlaying
+			g.roomDrawn = false
+			g.hudDirty = true
+			g.playerX = 0x60
+			g.playerY = 0x60
+			g.energy = InitialEnergy
+			g.weaponActive = false
+			g.entities.Clear()
 		}
 	}
 }
 
-// clearHUDArea clears the right 8-column HUD area.
-func (g *GameEnv) clearHUDArea() {
-	for y := 0; y < 192; y++ {
-		addr := screen.PixelAddr(192, y)
-		for col := 0; col < 8; col++ {
-			g.buf.Pixels[addr+uint16(col)] = 0
-		}
-	}
+// nextRand returns a pseudo-random byte.
+func (g *GameEnv) nextRand() byte {
+	// LFSR-style PRNG
+	g.rand ^= g.rand << 7
+	g.rand ^= g.rand >> 9
+	g.rand ^= g.rand << 8
+	return byte(g.rand)
 }
 
-// Room centre coordinates — hardcoded in the original Z80 at $8FED/$8FF8.
-const (
-	roomCentreX = 0x58 // 88 decimal
-	roomCentreY = 0x68 // 104 decimal
-)
+// ---------- MOVEMENT ----------
 
-// movePlayer handles player movement input.
-// Matches the original Z80 collision system: rectangular bounds centred at
-// (0x58, 0x68) with room_width and room_height from the style table.
-// X and Y axes are checked independently so the player slides along walls.
 func (g *GameEnv) movePlayer(act action.Action) {
 	speed := int(2)
 	ra := data.RoomAttrs[g.room]
 	style := data.RoomStyles[ra.Style]
-	rw := int(style.Width)  // room interior half-width
-	rh := int(style.Height) // room interior half-height
+	rw := int(style.Width)
+	rh := int(style.Height)
 
 	g.moving = false
 	dx, dy := 0, 0
@@ -189,8 +243,6 @@ func (g *GameEnv) movePlayer(act action.Action) {
 		g.moving = true
 	}
 
-	// Wall check: abs(pos - centre) < dimension means INSIDE the room.
-	// Original checks each axis independently so the player slides along walls.
 	newX := int(g.playerX) + dx
 	xBlocked := !inWallBounds(newX, roomCentreX, rw)
 	if !xBlocked {
@@ -203,7 +255,6 @@ func (g *GameEnv) movePlayer(act action.Action) {
 		g.playerY = byte(newY)
 	}
 
-	// If movement was blocked by a wall, check for door exit on that edge.
 	if g.doorTimer <= 0 && (xBlocked || yBlocked) {
 		g.checkDoorExit(dx, dy, rw, rh)
 	}
@@ -213,8 +264,6 @@ func (g *GameEnv) movePlayer(act action.Action) {
 	}
 }
 
-// inWallBounds returns true if pos is inside the room boundary.
-// Original Z80: abs(pos - centre) < dimension.
 func inWallBounds(pos, centre, dimension int) bool {
 	d := pos - centre
 	if d < 0 {
@@ -223,18 +272,191 @@ func inWallBounds(pos, centre, dimension int) bool {
 	return d < dimension
 }
 
-// drawPlayer draws the player character sprite at the current position.
-func (g *GameEnv) drawPlayer() {
-	sprites := data.CharacterSprites(g.character)
-	frame := data.AnimFrame(g.walkCounter)
-	sprData := sprites[g.playerDir][frame]
-	g.buf.DrawSpriteXOR(int(g.playerX), int(g.playerY), sprData)
+// ---------- CREATURES ----------
+
+func (g *GameEnv) spawnCreatures() {
+	if g.spawnDelay > 0 {
+		g.spawnDelay--
+		return
+	}
+	// 1/16 chance per frame to spawn
+	if g.nextRand()&0x0F != 0 {
+		return
+	}
+	if g.entities.CountInRoom(g.room, entity.TypeCreature) >= entity.MaxCreaturesPerRoom {
+		return
+	}
+
+	ra := data.RoomAttrs[g.room]
+	style := data.RoomStyles[ra.Style]
+	rw := int(style.Width) - 8
+	rh := int(style.Height) - 8
+
+	e := g.entities.Spawn()
+	if e == nil {
+		return
+	}
+
+	kind := int(g.nextRand() & 0x0F)
+	e.Type = entity.TypeCreature
+	e.Room = g.room
+	e.Graphic = entity.CreatureGraphics[kind]
+	e.Attr = 0x44 + byte(kind&0x07) // vary colour
+	e.X = roomCentreX - rw + int(g.nextRand())%(rw*2)
+	e.Y = roomCentreY - rh + int(g.nextRand())%(rh*2)
+	e.Timer = byte(kind)
+
+	// Random initial velocity
+	g.setRandomVelocity(e)
 }
 
-// checkDoorExit checks if the player is pressing against a wall where a door
-// exists and transitions to the connected room. Door positions in the data are
-// outside the room bounds (on the wall), so we determine which wall each door
-// is on and match it to the direction the player is pressing.
+func (g *GameEnv) setRandomVelocity(e *entity.Entity) {
+	r := g.nextRand()
+	e.VX = int(int8(r&0x03) - 1) // -1, 0, 1, or 2
+	r = g.nextRand()
+	e.VY = int(int8(r&0x03) - 1)
+	if e.VX == 0 && e.VY == 0 {
+		e.VX = 1
+	}
+}
+
+func (g *GameEnv) updateCreatures() {
+	ra := data.RoomAttrs[g.room]
+	style := data.RoomStyles[ra.Style]
+	rw := int(style.Width)
+	rh := int(style.Height)
+
+	g.entities.ForEachInRoom(g.room, func(e *entity.Entity) {
+		if e.Type != entity.TypeCreature {
+			return
+		}
+
+		// Animate
+		e.Frame++
+
+		// Move
+		e.X += e.VX
+		e.Y += e.VY
+
+		// Bounce off walls
+		if !inWallBounds(e.X, roomCentreX, rw) {
+			e.VX = -e.VX
+			e.X += e.VX * 2
+		}
+		if !inWallBounds(e.Y, roomCentreY, rh) {
+			e.VY = -e.VY
+			e.Y += e.VY * 2
+		}
+
+		// Random direction change every ~64 frames
+		if e.Frame%64 == 0 {
+			g.setRandomVelocity(e)
+		}
+	})
+}
+
+func (g *GameEnv) checkCreaturePlayerCollision() {
+	const collisionDist = 12 // $0C from original
+
+	px := int(g.playerX)
+	py := int(g.playerY)
+
+	g.entities.ForEachInRoom(g.room, func(e *entity.Entity) {
+		if e.Type != entity.TypeCreature {
+			return
+		}
+		if abs(px-e.X) < collisionDist && abs(py-e.Y) < collisionDist {
+			// Drain energy: $20 = 32 per hit, but only once per ~16 frames
+			if g.frame%16 == 0 {
+				if g.energy > 32 {
+					g.energy -= 32
+				} else {
+					g.energy = 0
+				}
+				g.hudDirty = true
+			}
+			if g.energy == 0 {
+				g.playerDeath()
+			}
+		}
+	})
+}
+
+func (g *GameEnv) playerDeath() {
+	if g.lives > 0 {
+		g.lives--
+	}
+	g.state = StateDead
+	g.hudDirty = true
+}
+
+// ---------- WEAPON ----------
+
+func (g *GameEnv) fireWeapon() {
+	g.weaponActive = true
+	g.weaponX = int(g.playerX)
+	g.weaponY = int(g.playerY)
+	g.weaponFrame = 0
+	g.weaponTimer = 30 // weapon lives for 30 frames
+
+	speed := 4
+	switch g.playerDir {
+	case data.DirUp:
+		g.weaponDX, g.weaponDY = 0, -speed
+	case data.DirDown:
+		g.weaponDX, g.weaponDY = 0, speed
+	case data.DirLeft:
+		g.weaponDX, g.weaponDY = -speed, 0
+	case data.DirRight:
+		g.weaponDX, g.weaponDY = speed, 0
+	}
+}
+
+func (g *GameEnv) updateWeapon() {
+	if !g.weaponActive {
+		return
+	}
+
+	g.weaponX += g.weaponDX
+	g.weaponY += g.weaponDY
+	g.weaponFrame++
+	g.weaponTimer--
+
+	// Check wall bounds
+	ra := data.RoomAttrs[g.room]
+	style := data.RoomStyles[ra.Style]
+	if !inWallBounds(g.weaponX, roomCentreX, int(style.Width)) ||
+		!inWallBounds(g.weaponY, roomCentreY, int(style.Height)) {
+		g.weaponActive = false
+		return
+	}
+
+	if g.weaponTimer <= 0 {
+		g.weaponActive = false
+		return
+	}
+
+	// Check hit on creatures
+	g.entities.ForEachInRoom(g.room, func(e *entity.Entity) {
+		if e.Type != entity.TypeCreature {
+			return
+		}
+		if abs(g.weaponX-e.X) < 12 && abs(g.weaponY-e.Y) < 12 {
+			// Kill creature — turn into explosion
+			e.Type = entity.TypeExplosion
+			e.Frame = 0
+			e.Timer = 16 // pop animation duration
+			e.VX = 0
+			e.VY = 0
+			g.weaponActive = false
+			g.score += 155
+			g.hudDirty = true
+		}
+	})
+}
+
+// ---------- DOORS ----------
+
 func (g *GameEnv) checkDoorExit(dx, dy, rw, rh int) {
 	doors := g.roomDoors[g.room]
 	px := int(g.playerX)
@@ -244,15 +466,11 @@ func (g *GameEnv) checkDoorExit(dx, dy, rw, rh int) {
 		doorX := int(d.X)
 		doorY := int(d.Y)
 
-		// Determine which wall this door is on by comparing its position to
-		// the room bounds.
 		onTop := doorY < roomCentreY-rh
 		onBottom := doorY > roomCentreY+rh
 		onLeft := doorX < roomCentreX-rw
 		onRight := doorX > roomCentreX+rw
 
-		// Check if the player is pressing toward this wall AND is roughly
-		// aligned with the door on the other axis (within 24 pixels).
 		const align = 24
 		matched := false
 
@@ -270,8 +488,6 @@ func (g *GameEnv) checkDoorExit(dx, dy, rw, rh int) {
 			continue
 		}
 
-		// Transition to connected room. Place the player at the opposite
-		// wall of the destination room so they enter from the right side.
 		destRA := data.RoomAttrs[d.DestRoom]
 		destStyle := data.RoomStyles[destRA.Style]
 		destRW := int(destStyle.Width)
@@ -280,7 +496,6 @@ func (g *GameEnv) checkDoorExit(dx, dy, rw, rh int) {
 		newX := int(d.DestX)
 		newY := int(d.DestY)
 
-		// Clamp destination to inside the new room bounds.
 		if newX <= roomCentreX-destRW {
 			newX = roomCentreX - destRW + 4
 		} else if newX >= roomCentreX+destRW {
@@ -298,36 +513,110 @@ func (g *GameEnv) checkDoorExit(dx, dy, rw, rh int) {
 		g.roomDrawn = false
 		g.hudDirty = true
 		g.doorTimer = 25
+		g.spawnDelay = 32
+		g.weaponActive = false
 		return
 	}
 }
 
-func abs(x int) int {
-	if x < 0 {
-		return -x
+// ---------- RENDERING ----------
+
+func (g *GameEnv) clearPlayArea() {
+	for y := 0; y < 192; y++ {
+		addr := screen.PixelAddr(0, y)
+		for col := 0; col < 24; col++ {
+			g.buf.Pixels[addr+uint16(col)] = 0
+		}
 	}
-	return x
 }
 
-// drawDoors renders door markers in the current room.
+func (g *GameEnv) clearHUDArea() {
+	for y := 0; y < 192; y++ {
+		addr := screen.PixelAddr(192, y)
+		for col := 0; col < 8; col++ {
+			g.buf.Pixels[addr+uint16(col)] = 0
+		}
+	}
+}
+
+func (g *GameEnv) drawPlayer() {
+	sprites := data.CharacterSprites(g.character)
+	frame := data.AnimFrame(g.walkCounter)
+	sprData := sprites[g.playerDir][frame]
+	g.buf.DrawSpriteXOR(int(g.playerX), int(g.playerY), sprData)
+}
+
+func (g *GameEnv) drawEntities() {
+	g.entities.ForEachInRoom(g.room, func(e *entity.Entity) {
+		switch e.Type {
+		case entity.TypeCreature:
+			f1, f2 := data.CreatureSpriteFrames(int(e.Timer))
+			var spr []byte
+			if e.Frame&0x08 == 0 {
+				spr = f1
+			} else {
+				spr = f2
+			}
+			g.buf.DrawSpriteXOR(e.X, e.Y, spr)
+
+		case entity.TypeExplosion:
+			e.Timer--
+			spr := data.PopFrames(int(e.Frame >> 2))
+			g.buf.DrawSpriteXOR(e.X, e.Y, spr)
+			e.Frame++
+			if e.Timer == 0 {
+				e.Active = false
+			}
+		}
+	})
+}
+
+func (g *GameEnv) drawWeapon() {
+	if !g.weaponActive {
+		return
+	}
+	// Simple weapon projectile: small cross
+	x, y := g.weaponX, g.weaponY
+	for d := -2; d <= 2; d++ {
+		g.buf.SetPixel(x+d, y)
+		g.buf.SetPixel(x, y+d)
+	}
+}
+
 func (g *GameEnv) drawDoors() {
 	doors := g.roomDoors[g.room]
+	ra := data.RoomAttrs[g.room]
+	style := data.RoomStyles[ra.Style]
+	rw := int(style.Width)
+	rh := int(style.Height)
+
 	for _, d := range doors {
-		x := int(d.X)
-		y := int(d.Y)
-		// Draw a simple door marker (small rectangle)
-		for dx := -3; dx <= 3; dx++ {
-			g.buf.SetPixel(x+dx, y-4)
-			g.buf.SetPixel(x+dx, y+4)
+		dx := int(d.X)
+		dy := int(d.Y)
+
+		// Only draw doors that are on room edges (within screen area)
+		// Clamp door marker to room boundary
+		if dx < roomCentreX-rw {
+			dx = roomCentreX - rw
+		} else if dx > roomCentreX+rw {
+			dx = roomCentreX + rw
 		}
-		for dy := -4; dy <= 4; dy++ {
-			g.buf.SetPixel(x-3, y+dy)
-			g.buf.SetPixel(x+3, y+dy)
+		if dy < roomCentreY-rh {
+			dy = roomCentreY - rh
+		} else if dy > roomCentreY+rh {
+			dy = roomCentreY + rh
+		}
+
+		// Draw a small gap/opening marker
+		for i := -3; i <= 3; i++ {
+			g.buf.SetPixel(dx+i, dy-4)
+			g.buf.SetPixel(dx+i, dy+4)
+			g.buf.SetPixel(dx-3, dy+i)
+			g.buf.SetPixel(dx+3, dy+i)
 		}
 	}
 }
 
-// drawRoom renders the current room frame to the buffer.
 func (g *GameEnv) drawRoom() {
 	if int(g.room) >= data.NumRooms {
 		return
@@ -338,10 +627,8 @@ func (g *GameEnv) drawRoom() {
 	}
 	style := data.RoomStyles[ra.Style]
 
-	// Fill attributes with room colour (24×24 character area)
 	g.buf.FillAttrArea(0, 0, 24, 24, ra.Colour)
 
-	// Draw room frame lines
 	for _, lg := range style.Lines {
 		if len(lg.Dsts) == 0 {
 			continue
@@ -363,7 +650,6 @@ func (g *GameEnv) drawRoom() {
 	}
 }
 
-// drawHUD draws the heads-up display.
 func (g *GameEnv) drawHUD() {
 	g.buf.FillAttrArea(24, 0, 8, 24, 0x47)
 
@@ -388,6 +674,15 @@ func (g *GameEnv) drawHUD() {
 	g.buf.DrawString(200, 80, "ROOM")
 	g.buf.DrawString(200, 88, formatByte(g.room))
 	g.buf.DrawString(200, 104, data.Characters[g.character].Name)
+}
+
+// ---------- HELPERS ----------
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 func formatBCD(val uint32) string {
