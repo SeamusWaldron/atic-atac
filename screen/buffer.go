@@ -119,7 +119,7 @@ func (b *Buffer) DrawSpriteXOR(x, y int, data []byte) {
 	shift := uint(x & 7) // sub-byte pixel offset
 
 	for row := 0; row < height; row++ {
-		py := y + row // draw DOWNWARD from y
+		py := y - row // draw UPWARD from y (entity Y = bottom of sprite)
 		if py < 0 || py >= ScreenHeightPx {
 			continue
 		}
@@ -167,7 +167,7 @@ func (b *Buffer) DrawSpriteOR(x, y int, data []byte) {
 	shift := uint(x & 7)
 
 	for row := 0; row < height; row++ {
-		py := y + row
+		py := y - row
 		if py < 0 || py >= ScreenHeightPx {
 			continue
 		}
