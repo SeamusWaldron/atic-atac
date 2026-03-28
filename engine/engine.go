@@ -250,7 +250,9 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	// Render
 	g.clearPlayArea()
 	g.drawRoom()
-	g.drawDecorations()
+	// TODO: drawDecorations disabled — coordinates and rendering need
+	// systematic fix to match Z80 xy_to_display and sprite draw direction.
+	// g.drawDecorations()
 	g.drawDoors()
 	g.drawEntities()
 	g.drawWeapon()
