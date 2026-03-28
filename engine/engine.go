@@ -255,8 +255,15 @@ func (g *GameEnv) movePlayer(act action.Action) {
 		g.playerY = byte(newY)
 	}
 
-	if g.doorTimer <= 0 && (xBlocked || yBlocked) {
-		g.checkDoorExit(dx, dy, rw, rh)
+	// Only check door exit when player is actively pressing into a wall
+	// (dx or dy must be non-zero on the blocked axis)
+	if g.doorTimer <= 0 {
+		if xBlocked && dx != 0 {
+			g.checkDoorExit(dx, 0, rw, rh)
+		}
+		if yBlocked && dy != 0 {
+			g.checkDoorExit(0, dy, rw, rh)
+		}
 	}
 
 	if g.moving {
