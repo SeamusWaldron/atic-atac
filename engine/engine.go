@@ -111,14 +111,11 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	// Player movement
 	g.movePlayer(act)
 
-	// Check door collision
 	if g.doorTimer > 0 {
 		g.doorTimer--
-	} else {
-		g.checkDoors()
 	}
 
-	// Redraw: clear play area, draw room frame, draw doors, draw player sprite
+	// Redraw: clear play area, draw room frame, draw player sprite
 	g.clearPlayArea()
 	g.drawRoom()
 	g.drawDoors()
@@ -195,13 +192,20 @@ func (g *GameEnv) movePlayer(act action.Action) {
 	// Wall check: abs(pos - centre) < dimension means INSIDE the room.
 	// Original checks each axis independently so the player slides along walls.
 	newX := int(g.playerX) + dx
-	if inWallBounds(newX, roomCentreX, rw) {
+	xBlocked := !inWallBounds(newX, roomCentreX, rw)
+	if !xBlocked {
 		g.playerX = byte(newX)
 	}
 
 	newY := int(g.playerY) + dy
-	if inWallBounds(newY, roomCentreY, rh) {
+	yBlocked := !inWallBounds(newY, roomCentreY, rh)
+	if !yBlocked {
 		g.playerY = byte(newY)
+	}
+
+	// If movement was blocked by a wall, check for door exit on that edge.
+	if g.doorTimer <= 0 && (xBlocked || yBlocked) {
+		g.checkDoorExit(dx, dy, rw, rh)
 	}
 
 	if g.moving {
@@ -227,30 +231,82 @@ func (g *GameEnv) drawPlayer() {
 	g.buf.DrawSpriteXOR(int(g.playerX), int(g.playerY), sprData)
 }
 
-// checkDoors checks if the player is near a door and transitions rooms.
-func (g *GameEnv) checkDoors() {
+// checkDoorExit checks if the player is pressing against a wall where a door
+// exists and transitions to the connected room. Door positions in the data are
+// outside the room bounds (on the wall), so we determine which wall each door
+// is on and match it to the direction the player is pressing.
+func (g *GameEnv) checkDoorExit(dx, dy, rw, rh int) {
 	doors := g.roomDoors[g.room]
-	const doorRadius = 10
+	px := int(g.playerX)
+	py := int(g.playerY)
 
 	for _, d := range doors {
-		dx := int(g.playerX) - int(d.X)
-		dy := int(g.playerY) - int(d.Y)
-		if dx < 0 {
-			dx = -dx
+		doorX := int(d.X)
+		doorY := int(d.Y)
+
+		// Determine which wall this door is on by comparing its position to
+		// the room bounds.
+		onTop := doorY < roomCentreY-rh
+		onBottom := doorY > roomCentreY+rh
+		onLeft := doorX < roomCentreX-rw
+		onRight := doorX > roomCentreX+rw
+
+		// Check if the player is pressing toward this wall AND is roughly
+		// aligned with the door on the other axis (within 24 pixels).
+		const align = 24
+		matched := false
+
+		if onTop && dy < 0 {
+			matched = abs(px-doorX) < align
+		} else if onBottom && dy > 0 {
+			matched = abs(px-doorX) < align
+		} else if onLeft && dx < 0 {
+			matched = abs(py-doorY) < align
+		} else if onRight && dx > 0 {
+			matched = abs(py-doorY) < align
 		}
-		if dy < 0 {
-			dy = -dy
+
+		if !matched {
+			continue
 		}
-		if dx < doorRadius && dy < doorRadius {
-			g.room = d.DestRoom
-			g.playerX = d.DestX
-			g.playerY = d.DestY
-			g.roomDrawn = false
-			g.hudDirty = true
-			g.doorTimer = 15 // cooldown frames to prevent bouncing
-			return
+
+		// Transition to connected room. Place the player at the opposite
+		// wall of the destination room so they enter from the right side.
+		destRA := data.RoomAttrs[d.DestRoom]
+		destStyle := data.RoomStyles[destRA.Style]
+		destRW := int(destStyle.Width)
+		destRH := int(destStyle.Height)
+
+		newX := int(d.DestX)
+		newY := int(d.DestY)
+
+		// Clamp destination to inside the new room bounds.
+		if newX <= roomCentreX-destRW {
+			newX = roomCentreX - destRW + 4
+		} else if newX >= roomCentreX+destRW {
+			newX = roomCentreX + destRW - 4
 		}
+		if newY <= roomCentreY-destRH {
+			newY = roomCentreY - destRH + 4
+		} else if newY >= roomCentreY+destRH {
+			newY = roomCentreY + destRH - 4
+		}
+
+		g.room = d.DestRoom
+		g.playerX = byte(newX)
+		g.playerY = byte(newY)
+		g.roomDrawn = false
+		g.hudDirty = true
+		g.doorTimer = 25
+		return
 	}
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // drawDoors renders door markers in the current room.
