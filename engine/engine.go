@@ -925,22 +925,20 @@ func (g *GameEnv) clearDoorFrameLines() {
 		}
 
 		x := int(e[3])
-		y := int(e[4])
-		const gapSize = 14
+		y := int(e[4]) - 1 // match the dec d in h_room_item ($9204)
 
 		onTop := y < roomCentreY-rh
 		onBottom := y > roomCentreY+rh
 		onLeft := x < roomCentreX-rw
 		onRight := x > roomCentreX+rw
 
-		// Clear a rectangular area at the door position covering
-		// where the frame line passes through. The door sprite is
-		// 4 bytes (32px) wide × 24 rows, drawn upward from Y.
-		// Clear the full area the door sprite will occupy.
-		sprW := 32 // door sprites are typically 4 bytes = 32px wide
+		// Clear the area the door sprite will occupy.
+		// Door sprites are 4 bytes (32px) wide × 24 rows, drawn upward from Y.
+		// Sprite occupies pixels y-23 to y (24 rows upward from bottom).
+		sprW := 32
 		sprH := 24
 		if onTop || onBottom || onLeft || onRight {
-			for py := y - sprH; py <= y; py++ {
+			for py := y - sprH + 1; py <= y; py++ {
 				for px := x; px < x+sprW; px++ {
 					g.buf.ClearPixel(px, py)
 				}
