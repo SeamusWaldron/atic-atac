@@ -253,6 +253,53 @@ func (b *Buffer) DrawSpriteWideOR(x, y, widthBytes, height int, data []byte) {
 	}
 }
 
+// DrawSpriteWideOverwrite draws an N-byte-wide sprite using OVERWRITE mode.
+// Unlike OR mode, this REPLACES display bytes, clearing any existing pixels.
+// Used for door sprites which need to erase frame lines beneath them.
+func (b *Buffer) DrawSpriteWideOverwrite(x, y, widthBytes, height int, data []byte) {
+	if len(data) < widthBytes*height {
+		return
+	}
+	col := x >> 3
+	shift := uint(x & 7)
+
+	for row := 0; row < height; row++ {
+		py := y - row
+		if py < 0 || py >= ScreenHeightPx {
+			continue
+		}
+		base := int(yTable[py]) + col
+		rowData := data[row*widthBytes : row*widthBytes+widthBytes]
+
+		if shift == 0 {
+			for c := 0; c < widthBytes; c++ {
+				a := base + c
+				if a >= 0 && a < DisplaySize {
+					b.Pixels[a] = rowData[c] // OVERWRITE, not OR
+				}
+			}
+		} else {
+			a := base
+			if a >= 0 && a < DisplaySize {
+				// Preserve bits outside the sprite, overwrite bits inside
+				mask0 := byte(0xFF) << (8 - shift)
+				b.Pixels[a] = (b.Pixels[a] & mask0) | (rowData[0] >> shift)
+			}
+			for c := 1; c < widthBytes; c++ {
+				a = base + c
+				if a >= 0 && a < DisplaySize {
+					b.Pixels[a] = (rowData[c-1] << (8 - shift)) | (rowData[c] >> shift)
+				}
+			}
+			a = base + widthBytes
+			if a >= 0 && a < DisplaySize {
+				maskEnd := byte(0xFF) >> shift
+				b.Pixels[a] = (b.Pixels[a] & maskEnd) | (rowData[widthBytes-1] << (8 - shift))
+			}
+		}
+	}
+}
+
 // DrawSpriteWideXOR draws an N-byte-wide sprite using XOR mode.
 func (b *Buffer) DrawSpriteWideXOR(x, y, widthBytes, height int, data []byte) {
 	if len(data) < widthBytes*height {

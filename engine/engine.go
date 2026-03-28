@@ -250,7 +250,6 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	// Render
 	g.clearPlayArea()
 	g.drawRoom()
-	g.clearDoorFrameLines()
 	g.drawDecorations()
 	g.drawEntities()
 	g.drawWeapon()
@@ -945,9 +944,14 @@ func (g *GameEnv) clearDoorFrameLines() {
 		if onTop || onBottom || onLeft || onRight {
 			endY := y
 			if onTop || onBottom {
-				endY = y + 2 // extend below for horizontal frame line
+				endY = y + 3 // extend further below for frame line
 			}
-			for py := y - sprH + 1; py <= endY; py++ {
+			startY := y - sprH + 1
+			// Also extend upward for top doors where frame line might be above sprite
+			if onTop {
+				startY = y - sprH - 1
+			}
+			for py := startY; py <= endY; py++ {
 				for px := x; px < x+sprW; px++ {
 					g.buf.ClearPixel(px, py)
 				}
@@ -1009,7 +1013,10 @@ func (g *GameEnv) drawDecorations() {
 		// draw_rot_obj dispatches through $9970 pixel rotation table.
 		// So ALL entity types rendered via h_room_item get pixel rotation.
 		mode := (int(e[5]) >> 5) & 0x07
-		drawDecoSprite(&g.buf, x, y, w, h, pixels, mode)
+		// Z80 blend mode from attr bits 1-0: 0=overwrite, 1=OR, 2=XOR
+		// Door sprites use overwrite (NOP) to erase frame lines beneath.
+		useOverwrite := (e[5] & 0x03) == 0
+		drawDecoSprite(&g.buf, x, y, w, h, pixels, mode, useOverwrite)
 	}
 }
 
@@ -1024,10 +1031,18 @@ func (g *GameEnv) drawDecorations() {
 // Mode 5: 180° + h-flip (downward, right-to-left)
 // Mode 6: 90° CW + h-flip variant
 // Mode 7: 90° CCW + flip variant
-func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int) {
+func drawWide(buf *screen.Buffer, x, y, w, h int, pixels []byte, overwrite bool) {
+	if overwrite {
+		buf.DrawSpriteWideOverwrite(x, y, w, h, pixels)
+	} else {
+		drawWide(buf, x, y, w, h, pixels, overwrite)
+	}
+}
+
+func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int, overwrite bool) {
 	switch mode {
 	case 0: // Normal: draw upward from Y, left-to-right
-		buf.DrawSpriteWideOR(x, y, w, h, pixels)
+		drawWide(buf, x, y, w, h, pixels, overwrite)
 
 	case 1: // Horizontal flip: upward from Y, reverse bytes per row
 		flipped := make([]byte, len(pixels))
@@ -1036,11 +1051,11 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 				flipped[row*w+col] = reverseBits(pixels[row*w+(w-1-col)])
 			}
 		}
-		buf.DrawSpriteWideOR(x, y, w, h, flipped)
+		drawWide(buf, x, y, w, h, flipped, overwrite)
 
 	case 2: // 90° CW
 		ow, oh, op := rotateCW(w, h, pixels)
-		buf.DrawSpriteWideOR(x, y, ow, oh, op)
+		drawWide(buf, x, y, ow, oh, op, overwrite)
 
 	case 3: // 90° CCW + horizontal flip (right wall doors)
 		ow, oh, op := rotateCCW(w, h, pixels)
@@ -1055,14 +1070,14 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 				op[row*ow+mid] = reverseBits(op[row*ow+mid])
 			}
 		}
-		buf.DrawSpriteWideOR(x, y, ow, oh, op)
+		drawWide(buf, x, y, ow, oh, op, overwrite)
 
 	case 4: // 180°: draw upward from Y, rows in reverse order
 		reversed := make([]byte, len(pixels))
 		for row := 0; row < h; row++ {
 			copy(reversed[row*w:(row+1)*w], pixels[(h-1-row)*w:(h-row)*w])
 		}
-		buf.DrawSpriteWideOR(x, y, w, h, reversed)
+		drawWide(buf, x, y, w, h, reversed, overwrite)
 
 	case 5: // 180° + h-flip: rows reversed AND bytes reversed
 		flipped := make([]byte, len(pixels))
@@ -1072,7 +1087,7 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 				flipped[row*w+col] = reverseBits(pixels[srcRow*w+(w-1-col)])
 			}
 		}
-		buf.DrawSpriteWideOR(x, y, w, h, flipped)
+		drawWide(buf, x, y, w, h, flipped, overwrite)
 
 	case 6: // 270° CW = 90° CW + 180°
 		ow, oh, op := rotateCW(w, h, pixels)
@@ -1080,7 +1095,7 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 		for row := 0; row < oh; row++ {
 			copy(flipped[row*ow:(row+1)*ow], op[(oh-1-row)*ow:(oh-row)*ow])
 		}
-		buf.DrawSpriteWideOR(x, y, ow, oh, flipped)
+		drawWide(buf, x, y, ow, oh, flipped, overwrite)
 
 	case 7: // 270° CCW = 90° CCW + 180°
 		ow, oh, op := rotateCCW(w, h, pixels)
@@ -1088,10 +1103,10 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 		for row := 0; row < oh; row++ {
 			copy(flipped[row*ow:(row+1)*ow], op[(oh-1-row)*ow:(oh-row)*ow])
 		}
-		buf.DrawSpriteWideOR(x, y, ow, oh, flipped)
+		drawWide(buf, x, y, ow, oh, flipped, overwrite)
 
 	default:
-		buf.DrawSpriteWideOR(x, y, w, h, pixels)
+		drawWide(buf, x, y, w, h, pixels, overwrite)
 	}
 }
 
