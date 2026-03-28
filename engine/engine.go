@@ -1054,7 +1054,7 @@ func setPixelIn(out []byte, w, px, py int) {
 }
 
 // rotateCW rotates sprite 90° clockwise at pixel level.
-// Input pixel (sx, sy) → output pixel (srcPxH-1-sy, sx).
+// Input pixel (sx, sy) → output pixel (sy, srcPxW-1-sx).
 func rotateCW(w, h int, pixels []byte) (int, int, []byte) {
 	srcPxW, srcPxH := w*8, h
 	outPxW, outPxH := srcPxH, srcPxW
@@ -1063,7 +1063,7 @@ func rotateCW(w, h int, pixels []byte) (int, int, []byte) {
 	for sy := 0; sy < srcPxH; sy++ {
 		for sx := 0; sx < srcPxW; sx++ {
 			if getPixel(pixels, w, h, sx, sy) {
-				setPixelIn(out, outW, srcPxH-1-sy, sx)
+				setPixelIn(out, outW, sy, srcPxW-1-sx)
 			}
 		}
 	}
@@ -1071,7 +1071,7 @@ func rotateCW(w, h int, pixels []byte) (int, int, []byte) {
 }
 
 // rotateCCW rotates sprite 90° counter-clockwise at pixel level.
-// Input pixel (sx, sy) → output pixel (sy, srcPxW-1-sx).
+// Input pixel (sx, sy) → output pixel (srcPxH-1-sy, sx).
 func rotateCCW(w, h int, pixels []byte) (int, int, []byte) {
 	srcPxW, srcPxH := w*8, h
 	outPxW, outPxH := srcPxH, srcPxW
@@ -1080,7 +1080,7 @@ func rotateCCW(w, h int, pixels []byte) (int, int, []byte) {
 	for sy := 0; sy < srcPxH; sy++ {
 		for sx := 0; sx < srcPxW; sx++ {
 			if getPixel(pixels, w, h, sx, sy) {
-				setPixelIn(out, outW, sy, srcPxW-1-sx)
+				setPixelIn(out, outW, srcPxH-1-sy, sx)
 			}
 		}
 	}
