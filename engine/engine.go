@@ -933,10 +933,15 @@ func (g *GameEnv) clearDoorFrameLines() {
 		onRight := x > roomCentreX+rw
 
 		// Clear the area the door sprite will occupy.
-		// Door sprites are 4 bytes (32px) wide × 24 rows, drawn upward from Y.
-		// Sprite occupies pixels y-23 to y (24 rows upward from bottom).
+		// Base door sprite is 4 bytes (32px) wide × 24 rows.
+		// Rotated doors (modes 2,3,6,7) become 24px wide × 32 rows.
+		mode := (int(e[5]) >> 5) & 0x07
 		sprW := 32
 		sprH := 24
+		if mode >= 2 && mode <= 3 || mode >= 6 && mode <= 7 {
+			sprW = 24
+			sprH = 32
+		}
 		if onTop || onBottom || onLeft || onRight {
 			for py := y - sprH + 1; py <= y; py++ {
 				for px := x; px < x+sprW; px++ {
