@@ -943,9 +943,14 @@ func (g *GameEnv) clearDoorFrameLines() {
 			sprH = 32
 		}
 		if onTop || onBottom || onLeft || onRight {
-			// Extend clear area by 2 pixels each direction to catch frame lines
-			for py := y - sprH - 1; py <= y+2; py++ {
-				for px := x - 2; px < x+sprW+2; px++ {
+			// For top/bottom doors, extend clear 2px below the sprite
+			// to catch the horizontal frame line at the door base.
+			extraBelow := 0
+			if onTop || onBottom {
+				extraBelow = 2
+			}
+			for py := y - sprH + 1; py <= y+extraBelow; py++ {
+				for px := x; px < x+sprW; px++ {
 					g.buf.ClearPixel(px, py)
 				}
 			}
