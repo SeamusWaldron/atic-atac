@@ -104,8 +104,9 @@ func (b *Buffer) FillAttrArea(col, row, w, h int, attr byte) {
 }
 
 // DrawSpriteXOR draws a 2-byte-wide sprite at pixel position (x, y) using XOR mode.
-// data contains height as first byte, then 2 bytes per pixel row.
-// The sprite is drawn upward from (x, y) matching the original Z80 code.
+// (x, y) is the top-left of the sprite. Sprite data: first byte = height,
+// then 2 bytes per pixel row, top-to-bottom. Handles sub-byte pixel shifting
+// when x is not byte-aligned (spills into a 3rd byte).
 func (b *Buffer) DrawSpriteXOR(x, y int, data []byte) {
 	if len(data) < 1 {
 		return
@@ -115,24 +116,45 @@ func (b *Buffer) DrawSpriteXOR(x, y int, data []byte) {
 		return
 	}
 	col := x >> 3
+	shift := uint(x & 7) // sub-byte pixel offset
+
 	for row := 0; row < height; row++ {
-		py := y - row
+		py := y + row // draw DOWNWARD from y
 		if py < 0 || py >= ScreenHeightPx {
 			continue
 		}
-		addr := yTable[py] + uint16(col)
+		addr := int(yTable[py]) + col
 		b1 := data[1+row*2]
 		b2 := data[1+row*2+1]
-		if int(addr) < DisplaySize {
-			b.Pixels[addr] ^= b1
-		}
-		if int(addr)+1 < DisplaySize {
-			b.Pixels[addr+1] ^= b2
+
+		if shift == 0 {
+			// Byte-aligned: 2 bytes
+			if addr >= 0 && addr < DisplaySize {
+				b.Pixels[addr] ^= b1
+			}
+			if addr+1 >= 0 && addr+1 < DisplaySize {
+				b.Pixels[addr+1] ^= b2
+			}
+		} else {
+			// Shifted: spills across 3 bytes
+			s0 := b1 >> shift
+			s1 := (b1 << (8 - shift)) | (b2 >> shift)
+			s2 := b2 << (8 - shift)
+			if addr >= 0 && addr < DisplaySize {
+				b.Pixels[addr] ^= s0
+			}
+			if addr+1 >= 0 && addr+1 < DisplaySize {
+				b.Pixels[addr+1] ^= s1
+			}
+			if addr+2 >= 0 && addr+2 < DisplaySize {
+				b.Pixels[addr+2] ^= s2
+			}
 		}
 	}
 }
 
 // DrawSpriteOR draws a 2-byte-wide sprite at pixel position (x, y) using OR mode.
+// Same layout as DrawSpriteXOR but uses OR instead of XOR.
 func (b *Buffer) DrawSpriteOR(x, y int, data []byte) {
 	if len(data) < 1 {
 		return
@@ -142,45 +164,36 @@ func (b *Buffer) DrawSpriteOR(x, y int, data []byte) {
 		return
 	}
 	col := x >> 3
+	shift := uint(x & 7)
+
 	for row := 0; row < height; row++ {
-		py := y - row
+		py := y + row
 		if py < 0 || py >= ScreenHeightPx {
 			continue
 		}
-		addr := yTable[py] + uint16(col)
+		addr := int(yTable[py]) + col
 		b1 := data[1+row*2]
 		b2 := data[1+row*2+1]
-		if int(addr) < DisplaySize {
-			b.Pixels[addr] |= b1
-		}
-		if int(addr)+1 < DisplaySize {
-			b.Pixels[addr+1] |= b2
-		}
-	}
-}
 
-// DrawSprite4OR draws a 4-byte-wide sprite at pixel position (x, y) using OR mode.
-// data format: [width_bytes, height, ...pixel data...]
-func (b *Buffer) DrawSprite4OR(x, y int, data []byte) {
-	if len(data) < 2 {
-		return
-	}
-	width := int(data[0])
-	height := int(data[1])
-	if len(data) < 2+height*width {
-		return
-	}
-	col := x >> 3
-	for row := 0; row < height; row++ {
-		py := y - row
-		if py < 0 || py >= ScreenHeightPx {
-			continue
-		}
-		addr := yTable[py] + uint16(col)
-		for c := 0; c < width; c++ {
-			a := int(addr) + c
-			if a < DisplaySize {
-				b.Pixels[a] |= data[2+row*width+c]
+		if shift == 0 {
+			if addr >= 0 && addr < DisplaySize {
+				b.Pixels[addr] |= b1
+			}
+			if addr+1 >= 0 && addr+1 < DisplaySize {
+				b.Pixels[addr+1] |= b2
+			}
+		} else {
+			s0 := b1 >> shift
+			s1 := (b1 << (8 - shift)) | (b2 >> shift)
+			s2 := b2 << (8 - shift)
+			if addr >= 0 && addr < DisplaySize {
+				b.Pixels[addr] |= s0
+			}
+			if addr+1 >= 0 && addr+1 < DisplaySize {
+				b.Pixels[addr+1] |= s1
+			}
+			if addr+2 >= 0 && addr+2 < DisplaySize {
+				b.Pixels[addr+2] |= s2
 			}
 		}
 	}
