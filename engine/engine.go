@@ -941,20 +941,8 @@ func (g *GameEnv) drawDecorations() {
 		pixels := sprData[2:]
 		g.buf.DrawSpriteWideOR(x, y, w, h, pixels)
 
-		// Apply attribute colours if available
-		attrData, ok := data.GenDecoAttrs[gfxIdx]
-		if ok && len(attrData) >= 2 {
-			aw := int(attrData[0])
-			ah := int(attrData[1])
-			if len(attrData) >= 2+aw*ah {
-				col := x >> 3
-				row := (y - h + 1) >> 3
-				if row < 0 {
-					row = 0
-				}
-				g.buf.SetAttrGrid(col, row, attrData[2:], aw, ah)
-			}
-		}
+		// TODO: attribute painting disabled for debugging
+		_ = data.GenDecoAttrs
 	}
 }
 
