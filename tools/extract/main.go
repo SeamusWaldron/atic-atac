@@ -375,14 +375,12 @@ func genDecorationSprites() {
 	fmt.Fprintln(f, "// GenDecoSprites: extracted sprite pixel data for each decoration type.")
 	fmt.Fprintln(f, "// Format: first 2 bytes = [widthBytes, height], then widthBytes*height pixel bytes.")
 	fmt.Fprintln(f, "var GenDecoSprites = map[int][]byte{")
-	seen := make(map[uint16]bool)
 	for i := 0; i < 39; i++ {
 		addr := uint16(0xA600) + uint16(i*2)
 		ptr := getWord(addr)
-		if ptr == 0 || ptr == 0xAEEA || seen[ptr] { // skip null/empty and dupes
+		if ptr == 0 || ptr == 0xAEEA { // skip null/empty
 			continue
 		}
-		seen[ptr] = true
 		w := int(getByte(ptr))
 		h := int(getByte(ptr + 1))
 		if w == 0 || h == 0 || w > 8 || h > 48 {
@@ -409,14 +407,12 @@ func genDecorationSprites() {
 	fmt.Fprintln(f, "// GenDecoAttrs: extracted attribute data for each decoration type.")
 	fmt.Fprintln(f, "// Format: first 2 bytes = [width_cells, height_cells], then w*h attribute bytes.")
 	fmt.Fprintln(f, "var GenDecoAttrs = map[int][]byte{")
-	seen = make(map[uint16]bool)
 	for i := 0; i < 39; i++ {
 		addr := uint16(0xA64E) + uint16(i*2)
 		ptr := getWord(addr)
-		if ptr == 0 || ptr == 0xAEEA || seen[ptr] {
+		if ptr == 0 || ptr == 0xAEEA {
 			continue
 		}
-		seen[ptr] = true
 		w := int(getByte(ptr))
 		h := int(getByte(ptr + 1))
 		if w == 0 || h == 0 || w > 8 || h > 8 {

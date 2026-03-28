@@ -227,30 +227,39 @@ func (b *Buffer) DrawSpriteWideOR(x, y, widthBytes, height int, data []byte) {
 		base := int(yTable[py]) + col
 		rowData := data[row*widthBytes : row*widthBytes+widthBytes]
 
+		// Clip to play area (columns 0-23, pixel X 0-191)
+		maxCol := 24 - col // max bytes we can write before hitting HUD
+		if maxCol <= 0 {
+			continue
+		}
+		drawW := widthBytes
+		if drawW > maxCol {
+			drawW = maxCol
+		}
+
 		if shift == 0 {
-			for c := 0; c < widthBytes; c++ {
+			for c := 0; c < drawW; c++ {
 				a := base + c
 				if a >= 0 && a < DisplaySize {
 					b.Pixels[a] |= rowData[c]
 				}
 			}
 		} else {
-			// First byte: high bits of first data byte
 			a := base
-			if a >= 0 && a < DisplaySize {
+			if a >= 0 && a < DisplaySize && col >= 0 {
 				b.Pixels[a] |= rowData[0] >> shift
 			}
-			// Middle bytes: low bits of prev + high bits of current
-			for c := 1; c < widthBytes; c++ {
+			for c := 1; c < drawW; c++ {
 				a = base + c
 				if a >= 0 && a < DisplaySize {
 					b.Pixels[a] |= (rowData[c-1] << (8 - shift)) | (rowData[c] >> shift)
 				}
 			}
-			// Last byte: low bits of last data byte
-			a = base + widthBytes
-			if a >= 0 && a < DisplaySize {
-				b.Pixels[a] |= rowData[widthBytes-1] << (8 - shift)
+			if drawW < widthBytes || col+drawW < 24 {
+				a = base + drawW
+				if a >= 0 && a < DisplaySize && col+drawW < 24 {
+					b.Pixels[a] |= rowData[drawW-1] << (8 - shift)
+				}
 			}
 		}
 	}
