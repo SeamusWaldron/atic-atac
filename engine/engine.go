@@ -947,6 +947,42 @@ func (g *GameEnv) drawDecorations() {
 		// So ALL entity types rendered via h_room_item get pixel rotation.
 		mode := (int(e[5]) >> 5) & 0x07
 		drawDecoSprite(&g.buf, x, y, w, h, pixels, mode)
+
+		// Apply decoration attribute colours.
+		// The attr data from gfx_attrs has per-cell colours. For now, use a
+		// simplified approach: look up attr data, paint at entity position.
+		// $FF in attr data means use the room colour, $00 means skip.
+		attrData, hasAttr := data.GenDecoAttrs[gfxIdx]
+		if hasAttr && len(attrData) >= 2 {
+			aw := int(attrData[0])
+			ah := int(attrData[1])
+			if len(attrData) >= 2+aw*ah {
+				roomAttr := data.RoomAttrs[g.room].Colour
+				// Attr position: entity Y is bottom of sprite, so top is Y-spriteHeight
+				// Character cell coords from pixel position
+				acol := x >> 3
+				arow := (y - h) >> 3
+				if arow < 0 {
+					arow = 0
+				}
+				for ar := 0; ar < ah; ar++ {
+					for ac := 0; ac < aw; ac++ {
+						av := attrData[2+ar*aw+ac]
+						if av == 0x00 {
+							continue // skip transparent
+						}
+						if av == 0xFF {
+							av = roomAttr // use room colour
+						}
+						cr := arow + ar
+						cc := acol + ac
+						if cr >= 0 && cr < 24 && cc >= 0 && cc < 24 {
+							g.buf.Attrs[cr*32+cc] = av
+						}
+					}
+				}
+			}
+		}
 	}
 }
 
