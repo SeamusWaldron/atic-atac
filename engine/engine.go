@@ -971,11 +971,13 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 		}
 		buf.DrawSpriteWideOR(x, y, w, h, flipped)
 
-	case 2: // 90° CW: bit mask LSB→MSB, columns from end, rows forward
-		drawRotated90(buf, x, y, w, h, pixels, true, true, false)
+	case 2: // 90° CW
+		ow, oh, op := rotateCW(w, h, pixels)
+		buf.DrawSpriteWideOR(x, y, ow, oh, op)
 
-	case 3: // 90° CCW: bit mask MSB→LSB, columns from start, rows forward
-		drawRotated90(buf, x, y, w, h, pixels, false, false, false)
+	case 3: // 90° CCW
+		ow, oh, op := rotateCCW(w, h, pixels)
+		buf.DrawSpriteWideOR(x, y, ow, oh, op)
 
 	case 4: // 180°: draw upward from Y, rows in reverse order
 		reversed := make([]byte, len(pixels))
@@ -994,11 +996,23 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 		}
 		buf.DrawSpriteWideOR(x, y, w, h, flipped)
 
-	case 6: // 270° CW: like mode 2 but rows reversed (sbc_de_b in Z80)
-		drawRotated90(buf, x, y, w, h, pixels, true, true, true)
+	case 6: // 270° CW = 90° CCW + 180°
+		ow, oh, op := rotateCCW(w, h, pixels)
+		// Then flip 180° (reverse rows)
+		flipped := make([]byte, len(op))
+		for row := 0; row < oh; row++ {
+			copy(flipped[row*ow:(row+1)*ow], op[(oh-1-row)*ow:(oh-row)*ow])
+		}
+		buf.DrawSpriteWideOR(x, y, ow, oh, flipped)
 
-	case 7: // 270° CCW: like mode 3 but rows reversed (sbc_de_b in Z80)
-		drawRotated90(buf, x, y, w, h, pixels, false, false, true)
+	case 7: // 270° CCW = 90° CW + 180°
+		ow, oh, op := rotateCW(w, h, pixels)
+		// Then flip 180° (reverse rows)
+		flipped := make([]byte, len(op))
+		for row := 0; row < oh; row++ {
+			copy(flipped[row*ow:(row+1)*ow], op[(oh-1-row)*ow:(oh-row)*ow])
+		}
+		buf.DrawSpriteWideOR(x, y, ow, oh, flipped)
 
 	default:
 		buf.DrawSpriteWideOR(x, y, w, h, pixels)
@@ -1022,76 +1036,51 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 // mode 3 (CCW): bitMask starts $80 (MSB), rrc (right), columns from start (inc de)
 // mode 6:       like mode 2 but starts from bottom (sbc_de_b to go up in source)
 // mode 7:       like mode 3 but starts from bottom (sbc_de_b to go up in source)
-func drawRotated90(buf *screen.Buffer, x, y, w, h int, pixels []byte, cw bool, fromEnd bool, reverseRows bool) {
-	// Output dimensions after rotation:
-	//   outW = ceil(h/8) bytes (source rows → output columns)
-	//   outH = w*8 pixel rows (source byte-columns × 8 bits → output rows)
-	outW := (h + 7) / 8
-	outH := w * 8
+// getPixel reads one pixel from sprite data at pixel position (px, py).
+func getPixel(pixels []byte, w, h, px, py int) bool {
+	if px < 0 || py < 0 || px >= w*8 || py >= h {
+		return false
+	}
+	return pixels[py*w+px/8]&(0x80>>uint(px%8)) != 0
+}
 
-	out := make([]byte, outW*outH)
+// setPixelIn sets one pixel in an output buffer at pixel position (px, py).
+func setPixelIn(out []byte, w, px, py int) {
+	out[py*w+px/8] |= 0x80 >> uint(px%8)
+}
 
-	// Process each source byte-column
-	for colIdx := 0; colIdx < w; colIdx++ {
-		// Which actual source column to read
-		srcCol := colIdx
-		if fromEnd {
-			srcCol = w - 1 - colIdx
-		}
-
-		// For each of the 8 bits in this byte-column
-		for bitIdx := 0; bitIdx < 8; bitIdx++ {
-			// Which bit to test in each source byte
-			var bitMask byte
-			if cw {
-				// Mode 2/6: start at LSB ($01), rotate left
-				bitMask = 1 << uint(bitIdx)
-			} else {
-				// Mode 3/7: start at MSB ($80), rotate right
-				bitMask = 0x80 >> uint(bitIdx)
-			}
-
-			// This bit position produces one output row
-			outRow := colIdx*8 + bitIdx
-
-			// Pack h source rows into ceil(h/8) output bytes
-			var packed byte
-			packCount := 0
-
-			for ri := 0; ri < h; ri++ {
-				// Modes 6/7 read rows in reverse (DE -= B in Z80)
-				srcRow := ri
-				if reverseRows {
-					srcRow = h - 1 - ri
-				}
-				srcByte := pixels[srcRow*w+srcCol]
-				if srcByte&bitMask != 0 {
-					packed |= 0x80 >> uint(packCount)
-				}
-				packCount++
-
-				// Every 8 source rows, write the packed byte
-				if packCount == 8 {
-					outCol := srcRow / 8
-					if outRow < outH && outCol < outW {
-						out[outRow*outW+outCol] = packed
-					}
-					packed = 0
-					packCount = 0
-				}
-			}
-
-			// Write any remaining bits (partial last byte)
-			if packCount > 0 {
-				outCol := (h - 1) / 8
-				if outRow < outH && outCol < outW {
-					out[outRow*outW+outCol] = packed
-				}
+// rotateCW rotates sprite 90° clockwise at pixel level.
+// Input pixel (sx, sy) → output pixel (srcPxH-1-sy, sx).
+func rotateCW(w, h int, pixels []byte) (int, int, []byte) {
+	srcPxW, srcPxH := w*8, h
+	outPxW, outPxH := srcPxH, srcPxW
+	outW := (outPxW + 7) / 8
+	out := make([]byte, outW*outPxH)
+	for sy := 0; sy < srcPxH; sy++ {
+		for sx := 0; sx < srcPxW; sx++ {
+			if getPixel(pixels, w, h, sx, sy) {
+				setPixelIn(out, outW, srcPxH-1-sy, sx)
 			}
 		}
 	}
+	return outW, outPxH, out
+}
 
-	buf.DrawSpriteWideOR(x, y, outW, outH, out)
+// rotateCCW rotates sprite 90° counter-clockwise at pixel level.
+// Input pixel (sx, sy) → output pixel (sy, srcPxW-1-sx).
+func rotateCCW(w, h int, pixels []byte) (int, int, []byte) {
+	srcPxW, srcPxH := w*8, h
+	outPxW, outPxH := srcPxH, srcPxW
+	outW := (outPxW + 7) / 8
+	out := make([]byte, outW*outPxH)
+	for sy := 0; sy < srcPxH; sy++ {
+		for sx := 0; sx < srcPxW; sx++ {
+			if getPixel(pixels, w, h, sx, sy) {
+				setPixelIn(out, outW, sy, srcPxW-1-sx)
+			}
+		}
+	}
+	return outW, outPxH, out
 }
 
 // reverseBits reverses the bit order of a byte (mirror horizontally).
