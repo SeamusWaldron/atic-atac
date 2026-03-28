@@ -13,6 +13,26 @@ const (
 	roomCentreY = 0x68
 )
 
+// InvSlot represents one inventory slot.
+type InvSlot struct {
+	Occupied bool
+	ItemType byte // graphic ID of the item
+	Name     string
+}
+
+// Item graphic IDs from the original data.
+const (
+	ItemKeyGreen  = 0x81
+	ItemKeyRed    = 0x82 // reusing wine graphic for now
+	ItemKeyCyan   = 0x83
+	ItemKeyYellow = 0x84
+	ItemACGKey1   = 0x8C
+	ItemACGKey2   = 0x8D
+	ItemACGKey3   = 0x8E
+	ItemFood      = 0x50
+	ItemLeaf      = 0x80
+)
+
 // GameEnv is the headless game engine with Step/Reset API.
 type GameEnv struct {
 	buf screen.Buffer
@@ -49,6 +69,17 @@ type GameEnv struct {
 	weaponFrame  int
 	weaponTimer  int
 
+	// Inventory (3 slots, matching original $5E30-$5E3B)
+	inventory [3]InvSlot
+
+	// Clock (hours, minutes, seconds)
+	clockH, clockM, clockS byte
+	clockFrame             int
+
+	// Room tracking
+	visitedRooms [20]byte // bitfield: 150 rooms
+	visitPercent byte
+
 	// Door system
 	roomDoors map[byte][]data.RoomDoor
 	doorTimer int
@@ -84,6 +115,11 @@ func (g *GameEnv) Reset() {
 	g.weaponActive = false
 	g.spawnDelay = 32
 	g.entities.Clear()
+	g.inventory = [3]InvSlot{}
+	g.clockH, g.clockM, g.clockS = 0, 0, 0
+	g.clockFrame = 0
+	g.visitedRooms = [20]byte{}
+	g.visitPercent = 0
 
 	ch := data.Characters[g.character]
 	g.room = ch.StartRoom
@@ -91,6 +127,8 @@ func (g *GameEnv) Reset() {
 	g.playerY = ch.StartY
 
 	g.buf.Clear()
+	g.spawnItems()
+	g.markRoomVisited(g.room)
 }
 
 // SetCharacter sets the player character class and resets.
@@ -157,10 +195,21 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	g.updateCreatures()
 	g.checkCreaturePlayerCollision()
 
+	// Item pickup
+	g.checkPickup(act)
+
 	// Passive energy drain: 1 point every 16 frames (original: $0F mask check)
 	if g.frame&0x0F == 0 && g.energy > 0 {
 		g.energy--
-		g.hudDirty = true
+	}
+
+	// Clock
+	g.updateClock()
+
+	// Check win condition: all 3 ACG key pieces collected
+	if g.hasACGKeys() {
+		g.state = StateWin
+		g.score += 5000
 	}
 
 	// Door timer
@@ -493,6 +542,209 @@ func (g *GameEnv) updateWeapon() {
 	})
 }
 
+// ---------- ITEMS & INVENTORY ----------
+
+func (g *GameEnv) spawnItems() {
+	// Spawn keys in their designated rooms from the original data
+	keys := []struct {
+		init data.EntityInit
+		name string
+		typ  byte
+	}{
+		{data.GreenKeyInit, "GREEN KEY", ItemKeyGreen},
+		{data.RedKeyInit, "RED KEY", ItemKeyRed},
+		{data.CyanKeyInit, "CYAN KEY", ItemKeyCyan},
+		{data.YellowKeyInit, "YELLOW KEY", ItemKeyYellow},
+		{data.ACGKeyInit[0], "ACG KEY 1", ItemACGKey1},
+		{data.ACGKeyInit[1], "ACG KEY 2", ItemACGKey2},
+		{data.ACGKeyInit[2], "ACG KEY 3", ItemACGKey3},
+	}
+	for _, k := range keys {
+		e := g.entities.Spawn()
+		if e == nil {
+			break
+		}
+		e.Type = entity.TypeKey
+		e.Room = k.init[1]
+		e.X = int(k.init[3])
+		e.Y = int(k.init[4])
+		e.Attr = k.init[5]
+		e.Graphic = k.typ
+	}
+
+	// Spawn some food items from the food init table
+	for i := 0; i < 12 && i < len(data.FoodInit); i++ {
+		f := data.FoodInit[i]
+		e := g.entities.Spawn()
+		if e == nil {
+			break
+		}
+		e.Type = entity.TypeFood
+		e.Room = f[1]
+		e.X = int(f[3])
+		e.Y = int(f[4])
+		e.Attr = f[5]
+		e.Graphic = f[0]
+	}
+
+	// Spawn collectible items
+	collectibles := []struct {
+		init data.EntityInit
+		name string
+	}{
+		{data.LeafInit, "LEAF"},
+		{data.CrucifixInit, "CRUCIFIX"},
+		{data.SpannerInit, "SPANNER"},
+		{data.WineInit, "WINE"},
+		{data.CoinInit, "COIN"},
+	}
+	for _, c := range collectibles {
+		e := g.entities.Spawn()
+		if e == nil {
+			break
+		}
+		e.Type = entity.TypeCollectible
+		e.Room = c.init[1]
+		e.X = int(c.init[3])
+		e.Y = int(c.init[4])
+		e.Attr = c.init[5]
+		e.Graphic = c.init[0]
+	}
+}
+
+func (g *GameEnv) checkPickup(act action.Action) {
+	if act&action.Pickup == 0 {
+		return
+	}
+
+	px := int(g.playerX)
+	py := int(g.playerY)
+	const pickupDist = 16
+
+	g.entities.ForEachInRoom(g.room, func(e *entity.Entity) {
+		if e.Type != entity.TypeKey && e.Type != entity.TypeFood &&
+			e.Type != entity.TypeCollectible {
+			return
+		}
+		if abs(px-e.X) >= pickupDist || abs(py-e.Y) >= pickupDist {
+			return
+		}
+
+		switch e.Type {
+		case entity.TypeFood:
+			// Food restores energy directly (no inventory slot needed)
+			g.energy += 48
+			if g.energy > InitialEnergy {
+				g.energy = InitialEnergy
+			}
+			g.score += 50
+			e.Active = false
+
+		case entity.TypeCollectible:
+			// Collectibles give score
+			g.score += 100
+			e.Active = false
+
+		case entity.TypeKey:
+			// Keys go into inventory
+			slot := g.findFreeSlot()
+			if slot < 0 {
+				return // inventory full
+			}
+			g.inventory[slot] = InvSlot{
+				Occupied: true,
+				ItemType: e.Graphic,
+				Name:     keyName(e.Graphic),
+			}
+			e.Active = false
+		}
+		g.hudDirty = true
+	})
+}
+
+func (g *GameEnv) findFreeSlot() int {
+	for i := range g.inventory {
+		if !g.inventory[i].Occupied {
+			return i
+		}
+	}
+	return -1
+}
+
+func keyName(graphic byte) string {
+	switch graphic {
+	case ItemKeyGreen:
+		return "GREEN"
+	case ItemKeyRed:
+		return "RED"
+	case ItemKeyCyan:
+		return "CYAN"
+	case ItemKeyYellow:
+		return "YELLOW"
+	case ItemACGKey1:
+		return "ACG-1"
+	case ItemACGKey2:
+		return "ACG-2"
+	case ItemACGKey3:
+		return "ACG-3"
+	default:
+		return "KEY"
+	}
+}
+
+// ---------- CLOCK & ROOM TRACKING ----------
+
+func (g *GameEnv) updateClock() {
+	g.clockFrame++
+	if g.clockFrame >= 50 { // 50 frames = 1 second at 50fps
+		g.clockFrame = 0
+		g.clockS++
+		if g.clockS >= 60 {
+			g.clockS = 0
+			g.clockM++
+			if g.clockM >= 60 {
+				g.clockM = 0
+				g.clockH++
+			}
+		}
+	}
+}
+
+func (g *GameEnv) markRoomVisited(room byte) {
+	idx := int(room) / 8
+	bit := byte(1) << (uint(room) % 8)
+	if idx < len(g.visitedRooms) {
+		g.visitedRooms[idx] |= bit
+	}
+	// Recalculate percentage
+	visited := 0
+	for _, b := range g.visitedRooms {
+		for b != 0 {
+			visited += int(b & 1)
+			b >>= 1
+		}
+	}
+	g.visitPercent = byte(visited * 100 / data.NumRooms)
+}
+
+func (g *GameEnv) hasACGKeys() bool {
+	has := [3]bool{}
+	for _, slot := range g.inventory {
+		if !slot.Occupied {
+			continue
+		}
+		switch slot.ItemType {
+		case ItemACGKey1:
+			has[0] = true
+		case ItemACGKey2:
+			has[1] = true
+		case ItemACGKey3:
+			has[2] = true
+		}
+	}
+	return has[0] && has[1] && has[2]
+}
+
 // ---------- DOORS ----------
 
 func (g *GameEnv) checkDoorExit(dx, dy, rw, rh int) {
@@ -553,6 +805,7 @@ func (g *GameEnv) checkDoorExit(dx, dy, rw, rh int) {
 		g.doorTimer = 25
 		g.spawnDelay = 32
 		g.weaponActive = false
+		g.markRoomVisited(g.room)
 		return
 	}
 }
@@ -604,6 +857,23 @@ func (g *GameEnv) drawEntities() {
 			e.Frame++
 			if e.Timer == 0 {
 				e.Active = false
+			}
+
+		case entity.TypeKey, entity.TypeFood, entity.TypeCollectible:
+			// Draw items as small diamond markers (will be sprites later)
+			x, y := e.X, e.Y
+			for d := 0; d <= 3; d++ {
+				g.buf.SetPixel(x+d, y)
+				g.buf.SetPixel(x-d, y)
+				g.buf.SetPixel(x, y+d)
+				g.buf.SetPixel(x, y-d)
+			}
+			// Pulsing effect for keys
+			if e.Type == entity.TypeKey && g.frame&0x10 != 0 {
+				g.buf.SetPixel(x+2, y+2)
+				g.buf.SetPixel(x-2, y+2)
+				g.buf.SetPixel(x+2, y-2)
+				g.buf.SetPixel(x-2, y-2)
 			}
 		}
 	})
@@ -704,27 +974,51 @@ func (g *GameEnv) drawRoom() {
 func (g *GameEnv) drawHUD() {
 	g.buf.FillAttrArea(24, 0, 8, 24, 0x47)
 
-	g.buf.DrawString(200, 8, "SCORE")
-	g.buf.DrawString(200, 16, formatBCD(g.score))
+	// Score
+	g.buf.DrawString(200, 4, "SCORE")
+	g.buf.DrawString(200, 12, formatBCD(g.score))
 
-	g.buf.DrawString(200, 32, "LIVES")
+	// Lives
+	g.buf.DrawString(200, 24, "LIVES")
 	livesStr := make([]byte, g.lives)
 	for i := range livesStr {
 		livesStr[i] = '*'
 	}
-	g.buf.DrawString(200, 40, string(livesStr))
+	g.buf.DrawString(200, 32, string(livesStr))
 
-	g.buf.DrawString(200, 56, "ENRGY")
+	// Energy bar
+	g.buf.DrawString(200, 44, "ENRGY")
 	energyBars := int(g.energy) >> 4
 	barStr := make([]byte, energyBars)
 	for i := range barStr {
 		barStr[i] = '|'
 	}
-	g.buf.DrawString(200, 64, string(barStr))
+	g.buf.DrawString(200, 52, string(barStr))
 
-	g.buf.DrawString(200, 80, "ROOM")
-	g.buf.DrawString(200, 88, formatByte(g.room))
+	// Clock
+	g.buf.DrawString(200, 64, "TIME")
+	g.buf.DrawString(200, 72, formatClock(g.clockH, g.clockM, g.clockS))
+
+	// Room + visited
+	g.buf.DrawString(200, 84, "ROOM")
+	g.buf.DrawString(200, 92, formatByte(g.room))
+
 	g.buf.DrawString(200, 104, data.Characters[g.character].Name)
+
+	// Inventory (3 slots)
+	g.buf.DrawString(200, 120, "ITEMS")
+	for i, slot := range g.inventory {
+		y := 128 + i*10
+		if slot.Occupied {
+			g.buf.DrawString(200, y, slot.Name)
+		} else {
+			g.buf.DrawString(200, y, "-----")
+		}
+	}
+
+	// Visit percentage
+	g.buf.DrawString(200, 164, "MAP")
+	g.buf.DrawString(200, 172, formatByte(g.visitPercent)+"%")
 }
 
 // ---------- HELPERS ----------
@@ -743,6 +1037,14 @@ func formatBCD(val uint32) string {
 		val /= 10
 	}
 	return string(digits[:])
+}
+
+func formatClock(h, m, s byte) string {
+	return string([]byte{
+		'0' + h/10, '0' + h%10, ':',
+		'0' + m/10, '0' + m%10, ':',
+		'0' + s/10, '0' + s%10,
+	})
 }
 
 func formatByte(val byte) string {
