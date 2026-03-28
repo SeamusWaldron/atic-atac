@@ -861,21 +861,12 @@ func (g *GameEnv) drawEntities() {
 			}
 
 		case entity.TypeKey, entity.TypeFood, entity.TypeCollectible:
-			// Draw items as small diamond markers (will be sprites later)
+			// Small marker: single bright pixel cluster
 			x, y := e.X, e.Y
-			for d := 0; d <= 3; d++ {
-				g.buf.SetPixel(x+d, y)
-				g.buf.SetPixel(x-d, y)
-				g.buf.SetPixel(x, y+d)
-				g.buf.SetPixel(x, y-d)
-			}
-			// Pulsing effect for keys
-			if e.Type == entity.TypeKey && g.frame&0x10 != 0 {
-				g.buf.SetPixel(x+2, y+2)
-				g.buf.SetPixel(x-2, y+2)
-				g.buf.SetPixel(x+2, y-2)
-				g.buf.SetPixel(x-2, y-2)
-			}
+			g.buf.SetPixel(x, y)
+			g.buf.SetPixel(x+1, y)
+			g.buf.SetPixel(x, y+1)
+			g.buf.SetPixel(x+1, y+1)
 		}
 	})
 }
@@ -893,6 +884,8 @@ func (g *GameEnv) drawWeapon() {
 }
 
 func (g *GameEnv) drawDoors() {
+	// Door gaps are rendered by clearing pixels on the room frame walls
+	// where doors exist, creating visible openings.
 	doors := g.roomDoors[g.room]
 	ra := data.RoomAttrs[g.room]
 	style := data.RoomStyles[ra.Style]
@@ -902,10 +895,7 @@ func (g *GameEnv) drawDoors() {
 	for _, d := range doors {
 		doorX := int(d.X)
 		doorY := int(d.Y)
-
-		// Determine which wall the door is on and draw a gap (clear pixels)
-		// by XORing a block to erase the frame lines at the doorway.
-		const gapSize = 10
+		const gapSize = 12
 
 		onTop := doorY < roomCentreY-rh
 		onBottom := doorY > roomCentreY+rh
@@ -913,25 +903,23 @@ func (g *GameEnv) drawDoors() {
 		onRight := doorX > roomCentreX+rw
 
 		if onTop || onBottom {
-			// Horizontal wall: clear a vertical gap centred on doorX
 			wallY := roomCentreY - rh
 			if onBottom {
 				wallY = roomCentreY + rh
 			}
 			for px := doorX - gapSize; px <= doorX+gapSize; px++ {
-				for dy := -3; dy <= 3; dy++ {
+				for dy := -4; dy <= 4; dy++ {
 					g.buf.ClearPixel(px, wallY+dy)
 				}
 			}
 		}
 		if onLeft || onRight {
-			// Vertical wall: clear a horizontal gap centred on doorY
 			wallX := roomCentreX - rw
 			if onRight {
 				wallX = roomCentreX + rw
 			}
 			for py := doorY - gapSize; py <= doorY+gapSize; py++ {
-				for dx := -3; dx <= 3; dx++ {
+				for dx := -4; dx <= 4; dx++ {
 					g.buf.ClearPixel(wallX+dx, py)
 				}
 			}
@@ -992,17 +980,17 @@ func (g *GameEnv) drawHUD() {
 	const textX = 208
 	const valX = 208
 
-	// TIME (magenta label, white value)
+	// TIME (magenta label, white value) — short format to fit panel
 	g.buf.FillAttrArea(25, 3, 6, 1, 0x43)
 	g.buf.DrawString(textX, 24, "TIME")
 	g.buf.FillAttrArea(25, 4, 6, 1, 0x47)
-	g.buf.DrawString(valX, 32, formatClock(g.clockH, g.clockM, g.clockS))
+	g.buf.DrawString(textX, 32, formatClockShort(g.clockM, g.clockS))
 
 	// SCORE (magenta label, white value)
 	g.buf.FillAttrArea(25, 5, 6, 1, 0x43)
 	g.buf.DrawString(textX, 40, "SCORE")
 	g.buf.FillAttrArea(25, 6, 6, 1, 0x47)
-	g.buf.DrawString(valX, 48, formatBCD(g.score))
+	g.buf.DrawString(textX, 48, formatBCD(g.score))
 
 	// Chicken energy bar (yellow, rows 7-11 = Y 56-87)
 	g.buf.FillAttrArea(25, 7, 6, 5, 0x46)
@@ -1082,9 +1070,8 @@ func formatBCD(val uint32) string {
 	return string(digits[:])
 }
 
-func formatClock(h, m, s byte) string {
+func formatClockShort(m, s byte) string {
 	return string([]byte{
-		'0' + h/10, '0' + h%10, ':',
 		'0' + m/10, '0' + m%10, ':',
 		'0' + s/10, '0' + s%10,
 	})
