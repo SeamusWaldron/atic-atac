@@ -18,18 +18,16 @@ type GameEnv struct {
 	score     uint32
 	character data.CharacterClass
 
-	// Player position (original coordinate system)
-	playerX    byte
-	playerY    byte
-	oldPlayerX byte
-	oldPlayerY byte
-	playerDrawn bool
+	// Player position and movement
+	playerX     byte
+	playerY     byte
+	playerDir   int // data.DirLeft/Right/Up/Down
+	walkCounter int // animation counter
+	moving      bool
 
 	// Room rendering state
 	roomDrawn bool
-
-	// HUD needs redraw
-	hudDirty bool
+	hudDirty  bool
 }
 
 // New creates a new game engine.
@@ -48,7 +46,8 @@ func (g *GameEnv) Reset() {
 	g.score = 0
 	g.roomDrawn = false
 	g.hudDirty = true
-	g.playerDrawn = false
+	g.playerDir = data.DirDown
+	g.walkCounter = 0
 
 	ch := data.Characters[g.character]
 	g.room = ch.StartRoom
@@ -90,9 +89,6 @@ func (g *GameEnv) ChangeRoom(room byte) {
 	g.room = room
 	g.roomDrawn = false
 	g.hudDirty = true
-	g.playerDrawn = false
-
-	// Reset player to centre of new room
 	g.playerX = 0x60
 	g.playerY = 0x60
 }
@@ -106,21 +102,14 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 		g.hudDirty = true
 	}
 
-	// Erase old player (XOR to undo)
-	if g.playerDrawn {
-		g.xorPlayerAt(int(g.oldPlayerX), int(g.oldPlayerY))
-	}
-
 	// Player movement
 	g.movePlayer(act)
 
-	// Draw player at new position (XOR)
-	g.xorPlayerAt(int(g.playerX), int(g.playerY))
-	g.oldPlayerX = g.playerX
-	g.oldPlayerY = g.playerY
-	g.playerDrawn = true
+	// Redraw: clear play area, draw room frame, draw player sprite
+	g.clearPlayArea()
+	g.drawRoom()
+	g.drawPlayer()
 
-	// Draw HUD (only full redraw when dirty, otherwise just update dynamic parts)
 	if g.hudDirty {
 		g.clearHUDArea()
 		g.drawHUD()
@@ -153,27 +142,39 @@ func (g *GameEnv) movePlayer(act action.Action) {
 	speed := byte(2)
 	ra := data.RoomAttrs[g.room]
 	style := data.RoomStyles[ra.Style]
-
 	minX, minY, maxX, maxY := g.roomBounds(style)
 
+	g.moving = false
 	newX := g.playerX
 	newY := g.playerY
 
 	if act&action.Up != 0 && newY > minY+speed {
 		newY -= speed
+		g.playerDir = data.DirUp
+		g.moving = true
 	}
 	if act&action.Down != 0 && newY < maxY-speed {
 		newY += speed
+		g.playerDir = data.DirDown
+		g.moving = true
 	}
 	if act&action.Left != 0 && newX > minX+speed {
 		newX -= speed
+		g.playerDir = data.DirLeft
+		g.moving = true
 	}
 	if act&action.Right != 0 && newX < maxX-speed {
 		newX += speed
+		g.playerDir = data.DirRight
+		g.moving = true
 	}
 
 	g.playerX = newX
 	g.playerY = newY
+
+	if g.moving {
+		g.walkCounter++
+	}
 }
 
 // roomBounds returns the playable area bounds from the inner frame points.
@@ -185,7 +186,6 @@ func (g *GameEnv) roomBounds(style data.RoomStyle) (minX, minY, maxX, maxY byte)
 
 	pts := style.Points
 	if len(pts) >= 8 {
-		// For square/rect styles, inner frame is points 4-7
 		minX = pts[5].X
 		minY = pts[5].Y
 		maxX = pts[6].X
@@ -194,12 +194,12 @@ func (g *GameEnv) roomBounds(style data.RoomStyle) (minX, minY, maxX, maxY byte)
 	return
 }
 
-// xorPlayerAt draws/erases a player marker at the given position using XOR.
-func (g *GameEnv) xorPlayerAt(x, y int) {
-	for d := -2; d <= 2; d++ {
-		g.buf.XORPixel(x+d, y)
-		g.buf.XORPixel(x, y+d)
-	}
+// drawPlayer draws the player character sprite at the current position.
+func (g *GameEnv) drawPlayer() {
+	sprites := data.CharacterSprites(g.character)
+	frame := data.AnimFrame(g.walkCounter)
+	sprData := sprites[g.playerDir][frame]
+	g.buf.DrawSpriteXOR(int(g.playerX), int(g.playerY), sprData)
 }
 
 // drawRoom renders the current room frame to the buffer.
@@ -240,8 +240,7 @@ func (g *GameEnv) drawRoom() {
 
 // drawHUD draws the heads-up display.
 func (g *GameEnv) drawHUD() {
-	// Right side panel: columns 24-31
-	g.buf.FillAttrArea(24, 0, 8, 24, 0x47) // white ink, black paper
+	g.buf.FillAttrArea(24, 0, 8, 24, 0x47)
 
 	g.buf.DrawString(200, 8, "SCORE")
 	g.buf.DrawString(200, 16, formatBCD(g.score))
@@ -263,8 +262,6 @@ func (g *GameEnv) drawHUD() {
 
 	g.buf.DrawString(200, 80, "ROOM")
 	g.buf.DrawString(200, 88, formatByte(g.room))
-
-	// Character name
 	g.buf.DrawString(200, 104, data.Characters[g.character].Name)
 }
 

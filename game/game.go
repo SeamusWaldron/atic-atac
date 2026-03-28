@@ -22,9 +22,10 @@ type Game struct {
 	result engine.StepResult
 	room   byte
 
-	// Debounce for room switching keys
+	// Debounce for special keys
 	nWasPressed bool
 	pWasPressed bool
+	lastKeys    [3]bool // 1, 2, 3 for character select
 }
 
 // New creates a new Ebitengine game.
@@ -61,6 +62,17 @@ func (g *Game) Update() error {
 		g.eng.ChangeRoom(g.room)
 	}
 	g.pWasPressed = pPressed
+
+	// Character select: 1=Wizard, 2=Knight, 3=Serf
+	charKeys := [3]ebiten.Key{ebiten.Key1, ebiten.Key2, ebiten.Key3}
+	charClasses := [3]data.CharacterClass{data.Wizard, data.Knight, data.Serf}
+	for i, k := range charKeys {
+		pressed := ebiten.IsKeyPressed(k)
+		if pressed && !g.lastKeys[i] {
+			g.eng.SetCharacter(charClasses[i])
+		}
+		g.lastKeys[i] = pressed
+	}
 
 	act := input.ReadAction()
 	g.result = g.eng.Step(act)
