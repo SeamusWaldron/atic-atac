@@ -250,6 +250,7 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	// Render
 	g.clearPlayArea()
 	g.drawRoom()
+	g.clearDoorFrameLines()
 	g.drawDecorations()
 	g.drawEntities()
 	g.drawWeapon()
@@ -896,6 +897,65 @@ func (g *GameEnv) drawEntities() {
 			g.buf.SetPixel(x+1, y+1)
 		}
 	})
+}
+
+// clearDoorFrameLines erases pixels where door sprites sit on the room frame,
+// so the frame line doesn't show through the door base.
+func (g *GameEnv) clearDoorFrameLines() {
+	ra := data.RoomAttrs[g.room]
+	style := data.RoomStyles[ra.Style]
+	rw := int(style.Width)
+	rh := int(style.Height)
+
+	entities := data.GenRoomEntityData[int(g.room)]
+	for _, pair := range entities {
+		var e [8]byte
+		if pair[1] == g.room {
+			copy(e[:], pair[0:8])
+		} else if pair[9] == g.room {
+			copy(e[:], pair[8:16])
+		} else {
+			continue
+		}
+
+		typeID := int(e[0])
+		// Only door types need frame clearing
+		if typeID < 0x01 || typeID > 0x0F {
+			continue
+		}
+
+		x := int(e[3])
+		y := int(e[4])
+		const gapSize = 14
+
+		onTop := y < roomCentreY-rh
+		onBottom := y > roomCentreY+rh
+		onLeft := x < roomCentreX-rw
+		onRight := x > roomCentreX+rw
+
+		if onTop || onBottom {
+			wallY := roomCentreY - rh
+			if onBottom {
+				wallY = roomCentreY + rh
+			}
+			for px := x - gapSize; px <= x+gapSize; px++ {
+				for dy := -5; dy <= 5; dy++ {
+					g.buf.ClearPixel(px, wallY+dy)
+				}
+			}
+		}
+		if onLeft || onRight {
+			wallX := roomCentreX - rw
+			if onRight {
+				wallX = roomCentreX + rw
+			}
+			for py := y - gapSize; py <= y+gapSize; py++ {
+				for dx := -5; dx <= 5; dx++ {
+					g.buf.ClearPixel(wallX+dx, py)
+				}
+			}
+		}
+	}
 }
 
 func (g *GameEnv) drawDecorations() {
