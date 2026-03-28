@@ -5,8 +5,8 @@ const (
 	TargetFPS = 50
 
 	// Initial player state.
-	InitialEnergy = 0xFF
-	InitialLives  = 5
+	InitialEnergy = 0xF0 // $F0 = 240 from original Z80
+	InitialLives  = 3    // original starts with 3 lives
 )
 
 // Game states.

@@ -155,8 +155,8 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	g.updateCreatures()
 	g.checkCreaturePlayerCollision()
 
-	// Energy drain (slow drain over time — 1 point every 32 frames)
-	if g.frame%32 == 0 && g.energy > 0 {
+	// Passive energy drain: 1 point every 16 frames (original: $0F mask check)
+	if g.frame&0x0F == 0 && g.energy > 0 {
 		g.energy--
 		g.hudDirty = true
 	}
@@ -174,11 +174,9 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	g.drawWeapon()
 	g.drawPlayer()
 
-	if g.hudDirty {
-		g.clearHUDArea()
-		g.drawHUD()
-		g.hudDirty = false
-	}
+	// Always redraw HUD — it's cheap and ensures score/energy/lives stay current
+	g.clearHUDArea()
+	g.drawHUD()
 }
 
 // stepDead handles the death animation.
@@ -279,7 +277,11 @@ func (g *GameEnv) spawnCreatures() {
 		g.spawnDelay--
 		return
 	}
-	// 1/16 chance per frame to spawn
+	// Original: only check spawn on every 4th frame, then 1/16 random chance.
+	// At 50fps this gives roughly one spawn attempt every 1.3 seconds.
+	if g.frame&0x03 != 0 {
+		return
+	}
 	if g.nextRand()&0x0F != 0 {
 		return
 	}
@@ -366,17 +368,18 @@ func (g *GameEnv) checkCreaturePlayerCollision() {
 			return
 		}
 		if abs(px-e.X) < collisionDist && abs(py-e.Y) < collisionDist {
-			// Drain energy: $20 = 32 per hit, but only once per ~16 frames
-			if g.frame%16 == 0 {
+			// Original: damage_32 ($8ED7) drains $20 (32) per contact event.
+			// Gate to every 8 frames (~6 hits/sec) to avoid instant death.
+			if g.frame&0x07 == 0 {
 				if g.energy > 32 {
 					g.energy -= 32
 				} else {
 					g.energy = 0
 				}
 				g.hudDirty = true
-			}
-			if g.energy == 0 {
-				g.playerDeath()
+				if g.energy == 0 {
+					g.playerDeath()
+				}
 			}
 		}
 	})
