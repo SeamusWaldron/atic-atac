@@ -1000,18 +1000,16 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 		}
 		buf.DrawSpriteWideOR(x, y, w, h, flipped)
 
-	case 6: // 270° CW = 90° CCW + 180°
-		ow, oh, op := rotateCCW(w, h, pixels)
-		// Then flip 180° (reverse rows)
+	case 6: // 270° CW = 90° CW + 180°
+		ow, oh, op := rotateCW(w, h, pixels)
 		flipped := make([]byte, len(op))
 		for row := 0; row < oh; row++ {
 			copy(flipped[row*ow:(row+1)*ow], op[(oh-1-row)*ow:(oh-row)*ow])
 		}
 		buf.DrawSpriteWideOR(x, y, ow, oh, flipped)
 
-	case 7: // 270° CCW = 90° CW + 180°
-		ow, oh, op := rotateCW(w, h, pixels)
-		// Then flip 180° (reverse rows)
+	case 7: // 270° CCW = 90° CCW + 180°
+		ow, oh, op := rotateCCW(w, h, pixels)
 		flipped := make([]byte, len(op))
 		for row := 0; row < oh; row++ {
 			copy(flipped[row*ow:(row+1)*ow], op[(oh-1-row)*ow:(oh-row)*ow])
