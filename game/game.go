@@ -27,12 +27,13 @@ type Game struct {
 	pixels []byte
 	result engine.StepResult
 	room   byte
+	menu   MenuState
 
 	// Debounce for special keys
-	nWasPressed   bool
-	pWasPressed   bool
+	nWasPressed    bool
+	pWasPressed    bool
 	starWasPressed bool
-	lastKeys      [3]bool
+	lastKeys       [3]bool
 }
 
 // New creates a new Ebitengine game.
@@ -55,6 +56,16 @@ func (g *Game) Update() error {
 		g.saveScreenshot()
 	}
 	g.starWasPressed = starPressed
+
+	// Menu state
+	if g.eng.State() == engine.StateMenu {
+		if UpdateMenu(&g.menu, g.eng) {
+			g.eng.StartGame()
+		}
+		DrawMenu(g.eng.Buffer(), &g.menu)
+		g.result = g.eng.Step(0) // get buffer without advancing game
+		return nil
+	}
 
 	// Room browsing: F2 = next, F1 = previous (debug)
 	nPressed := ebiten.IsKeyPressed(ebiten.KeyF2)

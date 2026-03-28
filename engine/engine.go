@@ -102,7 +102,7 @@ func New() *GameEnv {
 
 // Reset resets the game to initial state.
 func (g *GameEnv) Reset() {
-	g.state = StatePlaying
+	g.state = StateMenu
 	g.character = data.Knight
 	g.lives = InitialLives
 	g.energy = InitialEnergy
@@ -134,6 +134,33 @@ func (g *GameEnv) Reset() {
 // SetCharacter sets the player character class and resets.
 // Character returns the current character class.
 func (g *GameEnv) Character() data.CharacterClass { return g.character }
+
+// State returns the current game state.
+func (g *GameEnv) State() GameState { return g.state }
+
+// Buffer returns the display buffer.
+func (g *GameEnv) Buffer() *screen.Buffer { return &g.buf }
+
+// StartGame transitions from menu to playing state.
+func (g *GameEnv) StartGame() {
+	g.state = StatePlaying
+	g.roomDrawn = false
+	g.hudDirty = true
+	g.entities.Clear()
+	g.spawnItems()
+
+	ch := data.Characters[g.character]
+	g.room = ch.StartRoom
+	g.playerX = ch.StartX
+	g.playerY = ch.StartY
+	g.energy = InitialEnergy
+	g.lives = InitialLives
+	g.score = 0
+	g.frame = 0
+	g.clockH, g.clockM, g.clockS = 0, 0, 0
+	g.markRoomVisited(g.room)
+	g.buf.Clear()
+}
 
 func (g *GameEnv) SetCharacter(c data.CharacterClass) {
 	g.character = c
@@ -223,6 +250,7 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	// Render
 	g.clearPlayArea()
 	g.drawRoom()
+	g.drawDecorations()
 	g.drawDoors()
 	g.drawEntities()
 	g.drawWeapon()
@@ -869,6 +897,22 @@ func (g *GameEnv) drawEntities() {
 			g.buf.SetPixel(x+1, y+1)
 		}
 	})
+}
+
+func (g *GameEnv) drawDecorations() {
+	entities := data.RoomEntityList[g.room]
+	for _, re := range entities {
+		dec := data.GetDecoration(re.Type)
+		if dec == nil {
+			continue
+		}
+		g.buf.DrawSpriteWideOR(int(re.X), int(re.Y), dec.WidthBytes, dec.Height, dec.Pixels)
+		if dec.Attrs != nil {
+			col := int(re.X) >> 3
+			row := (int(re.Y) - dec.Height + 1) >> 3
+			g.buf.SetAttrGrid(col, row, dec.Attrs, dec.AttrW, dec.AttrH)
+		}
+	}
 }
 
 func (g *GameEnv) drawWeapon() {

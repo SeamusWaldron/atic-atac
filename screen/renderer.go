@@ -25,20 +25,34 @@ var Palette = [16]color.RGBA{
 	{255, 255, 255, 255}, // 15: white (bright)
 }
 
-// RenderToRGBA converts the ZX Spectrum buffer into a flat RGBA byte slice
-// suitable for Ebitengine's NewImageFromImage or WritePixels.
+// FlashCounter tracks the global flash state for FLASH attribute.
+var FlashCounter int
+
+// RenderToRGBA converts the ZX Spectrum buffer into a flat RGBA byte slice.
 // Output is 256*192*4 bytes (RGBA for each pixel).
+// Handles the FLASH attribute (bit 7): swaps INK/PAPER every 16 frames.
 func RenderToRGBA(buf *Buffer, out []byte) {
+	FlashCounter++
+	flashSwap := (FlashCounter / 16) % 2
+
 	for charRow := 0; charRow < ScreenRows; charRow++ {
 		for charCol := 0; charCol < ScreenCols; charCol++ {
 			attr := buf.Attrs[charRow*ScreenCols+charCol]
 			ink := attr & 0x07
 			paper := (attr >> 3) & 0x07
 			bright := (attr >> 6) & 0x01
+			flash := (attr >> 7) & 0x01
+
 			if bright != 0 {
 				ink += 8
 				paper += 8
 			}
+
+			// FLASH: swap ink and paper every 16 frames
+			if flash != 0 && flashSwap != 0 {
+				ink, paper = paper, ink
+			}
+
 			inkC := Palette[ink]
 			paperC := Palette[paper]
 
