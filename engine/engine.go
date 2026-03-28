@@ -816,11 +816,9 @@ func (g *GameEnv) checkDoorExit(dx, dy, rw, rh int) {
 // ---------- RENDERING ----------
 
 func (g *GameEnv) clearPlayArea() {
-	for y := 0; y < 192; y++ {
-		addr := screen.PixelAddr(0, y)
-		for col := 0; col < 24; col++ {
-			g.buf.Pixels[addr+uint16(col)] = 0
-		}
+	// Clear all 6144 pixel bytes (entire display)
+	for i := range g.buf.Pixels {
+		g.buf.Pixels[i] = 0
 	}
 }
 
@@ -982,45 +980,57 @@ func (g *GameEnv) drawHUD() {
 	panelAttr := g.panelColour()
 	g.buf.FillAttrArea(24, 0, 8, 24, panelAttr)
 
-	// TIME label and value (magenta label, white value)
-	g.buf.FillAttrArea(25, 3, 6, 1, 0x43) // bright magenta
-	g.buf.DrawString(200, 24, "TIME")
-	g.buf.FillAttrArea(25, 4, 6, 1, 0x47) // bright white
-	g.buf.DrawString(200, 32, formatClock(g.clockH, g.clockM, g.clockS))
+	// Interior area of the scroll is roughly cols 25-30, rows 3-17.
+	// Layout from original (reference screenshot):
+	//   Row 3-4: TIME label + value
+	//   Row 5-6: SCORE label + value
+	//   Row 7-11: Chicken energy bar (large, yellow)
+	//   Row 12-14: Lives (3 character sprites)
+	//   Row 15-17: Inventory (3 item slots)
 
-	// SCORE label and value
-	g.buf.FillAttrArea(25, 5, 6, 1, 0x43) // bright magenta
-	g.buf.DrawString(200, 40, "SCORE")
-	g.buf.FillAttrArea(25, 6, 6, 1, 0x47) // bright white
-	g.buf.DrawString(200, 48, formatBCD(g.score))
+	// Interior X starts at pixel 200 (col 25), text offset to 208 (col 26)
+	const textX = 208
+	const valX = 208
 
-	// Chicken energy bar (yellow, rows 8-12)
-	g.buf.FillAttrArea(25, 8, 6, 4, 0x46) // bright yellow
+	// TIME (magenta label, white value)
+	g.buf.FillAttrArea(25, 3, 6, 1, 0x43)
+	g.buf.DrawString(textX, 24, "TIME")
+	g.buf.FillAttrArea(25, 4, 6, 1, 0x47)
+	g.buf.DrawString(valX, 32, formatClock(g.clockH, g.clockM, g.clockS))
+
+	// SCORE (magenta label, white value)
+	g.buf.FillAttrArea(25, 5, 6, 1, 0x43)
+	g.buf.DrawString(textX, 40, "SCORE")
+	g.buf.FillAttrArea(25, 6, 6, 1, 0x47)
+	g.buf.DrawString(valX, 48, formatBCD(g.score))
+
+	// Chicken energy bar (yellow, rows 7-11 = Y 56-87)
+	g.buf.FillAttrArea(25, 7, 6, 5, 0x46)
 	chickenRows := int(g.energy) * 30 / int(InitialEnergy)
 	if chickenRows > 30 {
 		chickenRows = 30
 	}
-	// Draw the chicken — full portion from bottom up
 	if chickenRows > 0 {
 		startRow := 30 - chickenRows
+		// Y position: bottom of chicken area = row 11 bottom = Y 95
 		g.buf.DrawSpriteWideOR(200, 95, 6, chickenRows,
 			data.ChickenFull[startRow*6:])
 	}
 
-	// Lives (bright white, rows 13-15)
-	g.buf.FillAttrArea(25, 13, 6, 3, 0x47)
+	// Lives (bright white, rows 12-14 = Y 96-111)
+	g.buf.FillAttrArea(25, 12, 6, 3, 0x47)
 	for i := byte(0); i < g.lives && i < 3; i++ {
-		lx := 200 + int(i)*16
+		lx := 204 + int(i)*16
 		sprites := data.CharacterSprites(g.character)
-		g.buf.DrawSpriteXOR(lx, 119, sprites[data.DirDown][0])
+		g.buf.DrawSpriteXOR(lx, 115, sprites[data.DirDown][0])
 	}
 
-	// Inventory slots (rows 16-18)
+	// Inventory slots (rows 15-17 = Y 120-135)
 	for i, slot := range g.inventory {
-		ix := 200 + i*16
+		ix := 204 + i*16
 		if slot.Occupied {
-			g.buf.FillAttrArea(25+i*2, 16, 2, 2, 0x47)
-			g.buf.DrawString(ix, 128, slot.Name[:1])
+			g.buf.FillAttrArea(25+i*2, 15, 2, 2, 0x47)
+			g.buf.DrawString(ix, 120, slot.Name[:1])
 		}
 	}
 }
