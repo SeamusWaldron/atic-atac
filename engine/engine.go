@@ -151,82 +151,72 @@ func (g *GameEnv) clearHUDArea() {
 	}
 }
 
+// Room centre coordinates — hardcoded in the original Z80 at $8FED/$8FF8.
+const (
+	roomCentreX = 0x58 // 88 decimal
+	roomCentreY = 0x68 // 104 decimal
+)
+
 // movePlayer handles player movement input.
+// Matches the original Z80 collision system: rectangular bounds centred at
+// (0x58, 0x68) with room_width and room_height from the style table.
+// X and Y axes are checked independently so the player slides along walls.
 func (g *GameEnv) movePlayer(act action.Action) {
-	speed := byte(2)
+	speed := int(2)
 	ra := data.RoomAttrs[g.room]
 	style := data.RoomStyles[ra.Style]
-	minX, minY, maxX, maxY := g.roomBounds(style)
+	rw := int(style.Width)  // room interior half-width
+	rh := int(style.Height) // room interior half-height
 
 	g.moving = false
-	newX := g.playerX
-	newY := g.playerY
+	dx, dy := 0, 0
 
-	if act&action.Up != 0 && newY > minY+speed {
-		newY -= speed
+	if act&action.Up != 0 {
+		dy = -speed
 		g.playerDir = data.DirUp
 		g.moving = true
 	}
-	if act&action.Down != 0 && newY < maxY-speed {
-		newY += speed
+	if act&action.Down != 0 {
+		dy = speed
 		g.playerDir = data.DirDown
 		g.moving = true
 	}
-	if act&action.Left != 0 && newX > minX+speed {
-		newX -= speed
+	if act&action.Left != 0 {
+		dx = -speed
 		g.playerDir = data.DirLeft
 		g.moving = true
 	}
-	if act&action.Right != 0 && newX < maxX-speed {
-		newX += speed
+	if act&action.Right != 0 {
+		dx = speed
 		g.playerDir = data.DirRight
 		g.moving = true
 	}
 
-	g.playerX = newX
-	g.playerY = newY
+	// Wall check: abs(pos - centre) < dimension means INSIDE the room.
+	// Original checks each axis independently so the player slides along walls.
+	newX := int(g.playerX) + dx
+	if inWallBounds(newX, roomCentreX, rw) {
+		g.playerX = byte(newX)
+	}
+
+	newY := int(g.playerY) + dy
+	if inWallBounds(newY, roomCentreY, rh) {
+		g.playerY = byte(newY)
+	}
 
 	if g.moving {
 		g.walkCounter++
 	}
 }
 
-// roomBounds computes the playable area from all room frame points.
-// Takes the bounding box of every vertex and insets by a margin.
-func (g *GameEnv) roomBounds(style data.RoomStyle) (minX, minY, maxX, maxY byte) {
-	pts := style.Points
-	if len(pts) == 0 {
-		return 0x20, 0x20, 0xA0, 0xA0
+// inWallBounds returns true if pos is inside the room boundary.
+// Original Z80: abs(pos - centre) < dimension.
+func inWallBounds(pos, centre, dimension int) bool {
+	d := pos - centre
+	if d < 0 {
+		d = -d
 	}
-
-	loX, loY := pts[0].X, pts[0].Y
-	hiX, hiY := pts[0].X, pts[0].Y
-	for _, p := range pts[1:] {
-		if p.X < loX {
-			loX = p.X
-		}
-		if p.Y < loY {
-			loY = p.Y
-		}
-		if p.X > hiX {
-			hiX = p.X
-		}
-		if p.Y > hiY {
-			hiY = p.Y
-		}
-	}
-
-	// Inset by 8 pixels so the player stays inside the frame
-	const margin = 8
-	minX = loX + margin
-	minY = loY + margin
-	if hiX > margin {
-		maxX = hiX - margin
-	}
-	if hiY > margin {
-		maxY = hiY - margin
-	}
-	return
+	return d < dimension
 }
 
 // drawPlayer draws the player character sprite at the current position.
