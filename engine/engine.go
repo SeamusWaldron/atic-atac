@@ -947,32 +947,6 @@ func (g *GameEnv) drawDecorations() {
 		// So ALL entity types rendered via h_room_item get pixel rotation.
 		mode := (int(e[5]) >> 5) & 0x07
 		drawDecoSprite(&g.buf, x, y, w, h, pixels, mode)
-
-		// Simple entity colouring: use the lower 5 bits of the attr byte
-		// (bits 4-0 = BRIGHT + PAPER + INK) as the attribute for cells
-		// the sprite covers. This gives each decoration its correct colour
-		// without needing mode-aware attr grid painting.
-		entityAttr := e[5] & 0x7F // strip the mode bits (7-5), keep colour
-		if entityAttr != 0 {
-			// Calculate which character cells the sprite covers
-			// Sprite drawn upward from y, so top = y - spriteH + 1
-			topY := y - h + 1
-			if topY < 0 {
-				topY = 0
-			}
-			cellTop := topY >> 3
-			cellBot := y >> 3
-			cellLeft := x >> 3
-			cellRight := (x + w*8 - 1) >> 3
-			if cellRight > 23 {
-				cellRight = 23
-			}
-			for cr := cellTop; cr <= cellBot && cr < 24; cr++ {
-				for cc := cellLeft; cc <= cellRight && cc < 32; cc++ {
-					g.buf.Attrs[cr*32+cc] = entityAttr
-				}
-			}
-		}
 	}
 }
 
