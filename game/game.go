@@ -49,9 +49,8 @@ func New() *Game {
 
 // Update is called every tick (target: 50 TPS).
 func (g *Game) Update() error {
-	// Screenshot: * key (Shift+8 on most keyboards)
-	starPressed := ebiten.IsKeyPressed(ebiten.KeyKPMultiply) ||
-		(ebiten.IsKeyPressed(ebiten.Key8) && (ebiten.IsKeyPressed(ebiten.KeyShift)))
+	// Screenshot: = key
+	starPressed := ebiten.IsKeyPressed(ebiten.KeyEqual)
 	if starPressed && !g.starWasPressed {
 		g.saveScreenshot()
 	}
