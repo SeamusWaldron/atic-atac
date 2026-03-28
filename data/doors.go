@@ -99,14 +99,38 @@ type RoomDoor struct {
 }
 
 // BuildRoomDoors builds a map from room number to the list of doors in that room.
+// Uses GenRoomEntityData (extracted from Z80) which has ALL door pairs for all 150 rooms.
 func BuildRoomDoors() map[byte][]RoomDoor {
 	result := make(map[byte][]RoomDoor)
 
-	for _, dp := range DoorDefs {
-		// Side A is in room dp.A.Room, leads to room dp.B.Room
-		addDoor(result, dp.A, dp.B)
-		// Side B is in room dp.B.Room, leads to room dp.A.Room
-		addDoor(result, dp.B, dp.A)
+	for _, entities := range GenRoomEntityData {
+		for _, pair := range entities {
+			typeA := pair[0]
+			typeB := pair[8]
+
+			// Only door types (0x01-0x0F) create navigable exits
+			if typeA > 0x0F && typeB > 0x0F {
+				continue
+			}
+
+			roomA := pair[1]
+			roomB := pair[9]
+			xA, yA := pair[3], pair[4]
+			xB, yB := pair[11], pair[12]
+
+			// Side A → Side B
+			if typeA >= 0x01 && typeA <= 0x0F {
+				result[roomA] = append(result[roomA], RoomDoor{
+					X: xA, Y: yA, DestRoom: roomB, DestX: xB, DestY: yB, Type: typeA,
+				})
+			}
+			// Side B → Side A
+			if typeB >= 0x01 && typeB <= 0x0F {
+				result[roomB] = append(result[roomB], RoomDoor{
+					X: xB, Y: yB, DestRoom: roomA, DestX: xA, DestY: yA, Type: typeB,
+				})
+			}
+		}
 	}
 
 	return result
