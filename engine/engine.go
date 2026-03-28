@@ -1006,54 +1006,82 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 }
 
 // drawRotated90 draws a sprite rotated 90° by reading columns from source
-// and packing bits into output bytes. Matches the Z80 draw_disp_2/3/6/7
-// functions which use column-based bit extraction with RL H' packing.
+// and packing bits into output bytes. Matches the Z80 draw_disp_2/3/6/7.
 //
-// The source sprite is w bytes wide × h rows. After 90° rotation:
-//   - Output height = w*8 pixel rows (each source byte column becomes 8 output rows)
-//   - Output width = ceil(h/8) bytes (h source rows pack into h/8 output bytes)
+// The Z80 algorithm:
+//   - For each source byte-column (outer loop over w):
+//     - For each source row (inner loop over h):
+//       - Test one bit of the source byte (selected by bitMask)
+//       - Pack into output byte H' via RL H' (shift left, carry in)
+//       - Every 8 rows, write the packed byte and advance display column
+//     - After all rows: advance display up one pixel line
+//     - Rotate bitMask to select next bit position
+//     - Every 8 bits: move to next/prev source column
 //
-// Parameters:
-//   cw=true:  clockwise (modes 2,6) — bit mask starts at LSB ($01), rotates left
-//   cw=false: counter-clockwise (modes 3,7) — bit mask starts at MSB ($80), rotates right
-//   fromEnd=true: start from last column of source (modes 2,6)
-//   fromEnd=false: start from first column of source (modes 3,7)
+// mode 2 (CW):  bitMask starts $01 (LSB), rlc (left), columns from end (dec de)
+// mode 3 (CCW): bitMask starts $80 (MSB), rrc (right), columns from start (inc de)
+// mode 6:       like mode 2 but starts from bottom (sbc_de_b to go up in source)
+// mode 7:       like mode 3 but starts from bottom (sbc_de_b to go up in source)
 func drawRotated90(buf *screen.Buffer, x, y, w, h int, pixels []byte, cw bool, fromEnd bool) {
-	outW := (h + 7) / 8 // output width in bytes
-	outH := w * 8        // output height in pixel rows
+	// Output dimensions after rotation:
+	//   outW = ceil(h/8) bytes (source rows → output columns)
+	//   outH = w*8 pixel rows (source byte-columns × 8 bits → output rows)
+	outW := (h + 7) / 8
+	outH := w * 8
 
 	out := make([]byte, outW*outH)
 
-	for srcCol := 0; srcCol < w; srcCol++ {
-		// Which source column to read
-		col := srcCol
+	// Process each source byte-column
+	for colIdx := 0; colIdx < w; colIdx++ {
+		// Which actual source column to read
+		srcCol := colIdx
 		if fromEnd {
-			col = w - 1 - srcCol
+			srcCol = w - 1 - colIdx
 		}
 
-		for srcRow := 0; srcRow < h; srcRow++ {
-			srcByte := pixels[srcRow*w+col]
+		// For each of the 8 bits in this byte-column
+		for bitIdx := 0; bitIdx < 8; bitIdx++ {
+			// Which bit to test in each source byte
+			var bitMask byte
+			if cw {
+				// Mode 2/6: start at LSB ($01), rotate left
+				bitMask = 1 << uint(bitIdx)
+			} else {
+				// Mode 3/7: start at MSB ($80), rotate right
+				bitMask = 0x80 >> uint(bitIdx)
+			}
 
-			for bit := 0; bit < 8; bit++ {
-				// Which bit in the source byte
-				var mask byte
-				if cw {
-					mask = 1 << uint(bit) // LSB first for CW
-				} else {
-					mask = 0x80 >> uint(bit) // MSB first for CCW
+			// This bit position produces one output row
+			outRow := colIdx*8 + bitIdx
+
+			// Pack h source rows into ceil(h/8) output bytes
+			var packed byte
+			packCount := 0
+
+			for srcRow := 0; srcRow < h; srcRow++ {
+				// Read the source byte and test the selected bit
+				srcByte := pixels[srcRow*w+srcCol]
+				if srcByte&bitMask != 0 {
+					packed |= 0x80 >> uint(packCount)
 				}
+				packCount++
 
-				if srcByte&mask == 0 {
-					continue
+				// Every 8 source rows, write the packed byte
+				if packCount == 8 {
+					outCol := srcRow / 8
+					if outRow < outH && outCol < outW {
+						out[outRow*outW+outCol] = packed
+					}
+					packed = 0
+					packCount = 0
 				}
+			}
 
-				// Output position: each source bit becomes one row in output
-				outRow := srcCol*8 + bit
-				outByte := srcRow / 8
-				outBit := uint(srcRow % 8)
-
-				if outRow < outH && outByte < outW {
-					out[outRow*outW+outByte] |= 0x80 >> outBit
+			// Write any remaining bits (partial last byte)
+			if packCount > 0 {
+				outCol := (h - 1) / 8
+				if outRow < outH && outCol < outW {
+					out[outRow*outW+outCol] = packed
 				}
 			}
 		}
