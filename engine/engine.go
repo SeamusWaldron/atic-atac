@@ -940,13 +940,13 @@ func (g *GameEnv) drawDecorations() {
 		}
 		pixels := sprData[2:]
 
-		// Draw mode from bits 7-5 of attr byte (Z80 extracts via rlca×3 & $07).
-		// Door entities (types 0x01-0x0F) use rotation for wall orientation —
-		// the same door sprite renders differently on each wall.
-		// Non-door decorations are already stored in their correct orientation
-		// and rendered via h_room_item without rotation.
+		// Pixel rotation: from Z80 analysis, ONLY door handlers call draw_rot_obj
+		// ($9213) which dispatches pixel rendering through the $9970 rotation table.
+		// h_room_item ($91FE) calls draw_bc_at_de ($9980) which dispatches
+		// ATTRIBUTE painting only ($9985 table) — NOT pixel rotation.
+		// Doors: types 0x01-0x0F and 0x20-0x23 (door_closed/door_open).
 		mode := 0
-		if typeID >= 0x01 && typeID <= 0x0F {
+		if (typeID >= 0x01 && typeID <= 0x0F) || (typeID >= 0x20 && typeID <= 0x23) {
 			mode = (int(e[5]) >> 5) & 0x07
 		}
 		drawDecoSprite(&g.buf, x, y, w, h, pixels, mode)
