@@ -943,13 +943,13 @@ func (g *GameEnv) clearDoorFrameLines() {
 			sprH = 32
 		}
 		if onTop || onBottom || onLeft || onRight {
-			// For top/bottom doors, extend clear 2px below the sprite
-			// to catch the horizontal frame line at the door base.
-			extraBelow := 0
+			// Top/bottom doors: shift clear area down by 2px to align
+			// with where the frame line actually sits relative to the sprite.
+			yOff := 0
 			if onTop || onBottom {
-				extraBelow = 2
+				yOff = 2
 			}
-			for py := y - sprH + 1; py <= y+extraBelow; py++ {
+			for py := y - sprH + 1 + yOff; py <= y+yOff; py++ {
 				for px := x; px < x+sprW; px++ {
 					g.buf.ClearPixel(px, py)
 				}
