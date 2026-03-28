@@ -25,6 +25,10 @@ type GameEnv struct {
 	walkCounter int // animation counter
 	moving      bool
 
+	// Door system
+	roomDoors map[byte][]data.RoomDoor
+	doorTimer int // cooldown to prevent instant re-entry
+
 	// Room rendering state
 	roomDrawn bool
 	hudDirty  bool
@@ -32,7 +36,9 @@ type GameEnv struct {
 
 // New creates a new game engine.
 func New() *GameEnv {
-	g := &GameEnv{}
+	g := &GameEnv{
+		roomDoors: data.BuildRoomDoors(),
+	}
 	g.Reset()
 	return g
 }
@@ -105,9 +111,17 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	// Player movement
 	g.movePlayer(act)
 
-	// Redraw: clear play area, draw room frame, draw player sprite
+	// Check door collision
+	if g.doorTimer > 0 {
+		g.doorTimer--
+	} else {
+		g.checkDoors()
+	}
+
+	// Redraw: clear play area, draw room frame, draw doors, draw player sprite
 	g.clearPlayArea()
 	g.drawRoom()
+	g.drawDoors()
 	g.drawPlayer()
 
 	if g.hudDirty {
@@ -200,6 +214,50 @@ func (g *GameEnv) drawPlayer() {
 	frame := data.AnimFrame(g.walkCounter)
 	sprData := sprites[g.playerDir][frame]
 	g.buf.DrawSpriteXOR(int(g.playerX), int(g.playerY), sprData)
+}
+
+// checkDoors checks if the player is near a door and transitions rooms.
+func (g *GameEnv) checkDoors() {
+	doors := g.roomDoors[g.room]
+	const doorRadius = 10
+
+	for _, d := range doors {
+		dx := int(g.playerX) - int(d.X)
+		dy := int(g.playerY) - int(d.Y)
+		if dx < 0 {
+			dx = -dx
+		}
+		if dy < 0 {
+			dy = -dy
+		}
+		if dx < doorRadius && dy < doorRadius {
+			g.room = d.DestRoom
+			g.playerX = d.DestX
+			g.playerY = d.DestY
+			g.roomDrawn = false
+			g.hudDirty = true
+			g.doorTimer = 15 // cooldown frames to prevent bouncing
+			return
+		}
+	}
+}
+
+// drawDoors renders door markers in the current room.
+func (g *GameEnv) drawDoors() {
+	doors := g.roomDoors[g.room]
+	for _, d := range doors {
+		x := int(d.X)
+		y := int(d.Y)
+		// Draw a simple door marker (small rectangle)
+		for dx := -3; dx <= 3; dx++ {
+			g.buf.SetPixel(x+dx, y-4)
+			g.buf.SetPixel(x+dx, y+4)
+		}
+		for dy := -4; dy <= 4; dy++ {
+			g.buf.SetPixel(x-3, y+dy)
+			g.buf.SetPixel(x+3, y+dy)
+		}
+	}
 }
 
 // drawRoom renders the current room frame to the buffer.
