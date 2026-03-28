@@ -971,11 +971,11 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 		}
 		buf.DrawSpriteWideOR(x, y, w, h, flipped)
 
-	case 2: // 90° CW: bit mask LSB→MSB, start from last column
-		drawRotated90(buf, x, y, w, h, pixels, true, true)
+	case 2: // 90° CW: bit mask LSB→MSB, columns from end, rows forward
+		drawRotated90(buf, x, y, w, h, pixels, true, true, false)
 
-	case 3: // 90° CCW: bit mask MSB→LSB, start from first column
-		drawRotated90(buf, x, y, w, h, pixels, false, false)
+	case 3: // 90° CCW: bit mask MSB→LSB, columns from start, rows forward
+		drawRotated90(buf, x, y, w, h, pixels, false, false, false)
 
 	case 4: // 180°: draw upward from Y, rows in reverse order
 		reversed := make([]byte, len(pixels))
@@ -994,11 +994,11 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 		}
 		buf.DrawSpriteWideOR(x, y, w, h, flipped)
 
-	case 6: // 270° CW (= 90° CCW from bottom): bit mask LSB→MSB, from last col, start at bottom
-		drawRotated90(buf, x, y, w, h, pixels, true, true)
+	case 6: // 270° CW: like mode 2 but rows reversed (sbc_de_b in Z80)
+		drawRotated90(buf, x, y, w, h, pixels, true, true, true)
 
-	case 7: // 270° CCW (= 90° CW from bottom): bit mask MSB→LSB, from first col, start at bottom
-		drawRotated90(buf, x, y, w, h, pixels, false, false)
+	case 7: // 270° CCW: like mode 3 but rows reversed (sbc_de_b in Z80)
+		drawRotated90(buf, x, y, w, h, pixels, false, false, true)
 
 	default:
 		buf.DrawSpriteWideOR(x, y, w, h, pixels)
@@ -1022,7 +1022,7 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 // mode 3 (CCW): bitMask starts $80 (MSB), rrc (right), columns from start (inc de)
 // mode 6:       like mode 2 but starts from bottom (sbc_de_b to go up in source)
 // mode 7:       like mode 3 but starts from bottom (sbc_de_b to go up in source)
-func drawRotated90(buf *screen.Buffer, x, y, w, h int, pixels []byte, cw bool, fromEnd bool) {
+func drawRotated90(buf *screen.Buffer, x, y, w, h int, pixels []byte, cw bool, fromEnd bool, reverseRows bool) {
 	// Output dimensions after rotation:
 	//   outW = ceil(h/8) bytes (source rows → output columns)
 	//   outH = w*8 pixel rows (source byte-columns × 8 bits → output rows)
@@ -1058,8 +1058,12 @@ func drawRotated90(buf *screen.Buffer, x, y, w, h int, pixels []byte, cw bool, f
 			var packed byte
 			packCount := 0
 
-			for srcRow := 0; srcRow < h; srcRow++ {
-				// Read the source byte and test the selected bit
+			for ri := 0; ri < h; ri++ {
+				// Modes 6/7 read rows in reverse (DE -= B in Z80)
+				srcRow := ri
+				if reverseRows {
+					srcRow = h - 1 - ri
+				}
 				srcByte := pixels[srcRow*w+srcCol]
 				if srcByte&bitMask != 0 {
 					packed |= 0x80 >> uint(packCount)
