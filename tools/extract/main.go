@@ -605,9 +605,10 @@ func genRoomEntities() {
 	fmt.Fprintln(f, "")
 	fmt.Fprintln(f, "// GenRoomEntityData: per-room entity records.")
 	fmt.Fprintln(f, "// Each entity is [type, room, flags, x, y, attr, p1, p2] (8 bytes).")
-	fmt.Fprintln(f, "// Extracted by following room_table pointers to entity pointer lists,")
-	fmt.Fprintln(f, "// then reading the 8-byte entity at each pointer address.")
-	fmt.Fprintln(f, "var GenRoomEntityData = map[int][][8]byte{")
+	fmt.Fprintln(f, "// For linked pairs (doors), both sides are emitted — the engine")
+	fmt.Fprintln(f, "// must check which side's room matches the current room.")
+	fmt.Fprintln(f, "// Format: [16]byte = side_A (8 bytes) + side_B (8 bytes).")
+	fmt.Fprintln(f, "var GenRoomEntityData = map[int][][16]byte{")
 
 	roomTableBase := uint16(0x757D)
 	for room := 0; room < 150; room++ {
@@ -616,7 +617,7 @@ func genRoomEntities() {
 			continue
 		}
 
-		var entities [][8]byte
+		var entities [][16]byte
 		cur := roomPtr
 		for {
 			entityPtr := getWord(cur)
@@ -625,16 +626,19 @@ func genRoomEntities() {
 			}
 			cur += 2
 
-			// Read 8-byte entity record at the pointer address
-			b := getBytes(entityPtr, 8)
-			entities = append(entities, [8]byte{b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]})
+			// Read BOTH sides of the linked pair (16 bytes total)
+			b := getBytes(entityPtr, 16)
+			var e [16]byte
+			copy(e[:], b)
+			entities = append(entities, e)
 		}
 
 		if len(entities) > 0 {
 			fmt.Fprintf(f, "\t%d: {\n", room)
 			for _, e := range entities {
-				fmt.Fprintf(f, "\t\t{0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X},\n",
-					e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7])
+				fmt.Fprintf(f, "\t\t{0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X, 0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X},\n",
+					e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7],
+					e[8], e[9], e[10], e[11], e[12], e[13], e[14], e[15])
 			}
 			fmt.Fprintln(f, "\t},")
 		}

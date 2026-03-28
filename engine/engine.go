@@ -250,9 +250,7 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	// Render
 	g.clearPlayArea()
 	g.drawRoom()
-	// TODO: drawDecorations disabled — coordinates and rendering need
-	// systematic fix to match Z80 xy_to_display and sprite draw direction.
-	// g.drawDecorations()
+	g.drawDecorations()
 	g.drawDoors()
 	g.drawEntities()
 	g.drawWeapon()
@@ -903,19 +901,31 @@ func (g *GameEnv) drawEntities() {
 
 func (g *GameEnv) drawDecorations() {
 	entities := data.GenRoomEntityData[int(g.room)]
-	for _, e := range entities {
-		typeID := int(e[0])
-		eRoom := e[1]
-		x := int(e[3])
-		y := int(e[4])
+	for _, pair := range entities {
+		// Each entry is a 16-byte linked pair: side A (bytes 0-7) + side B (bytes 8-15).
+		// The Z80 checks side A's room (byte 1) — if it doesn't match the
+		// current room, it uses side B (+8 bytes). This is the XOR $08 trick.
+		var e [8]byte
+		if pair[1] == g.room {
+			copy(e[:], pair[0:8])
+		} else if pair[9] == g.room {
+			copy(e[:], pair[8:16])
+		} else {
+			continue // neither side matches
+		}
 
-		// Only draw entities that belong to this room
-		if eRoom != g.room && eRoom != 0 {
+		typeID := int(e[0])
+		x := int(e[3])
+		y := int(e[4]) - 1 // Z80 does dec d ($9204) before rendering
+
+		// gfx_data index is type-1 (Z80 does dec c at $9998)
+		gfxIdx := typeID - 1
+		if gfxIdx < 0 {
 			continue
 		}
 
 		// Look up sprite data from the generated gfx_data table
-		sprData, ok := data.GenDecoSprites[typeID]
+		sprData, ok := data.GenDecoSprites[gfxIdx]
 		if !ok || len(sprData) < 2 {
 			continue
 		}
@@ -928,13 +938,16 @@ func (g *GameEnv) drawDecorations() {
 		g.buf.DrawSpriteWideOR(x, y, w, h, pixels)
 
 		// Apply attribute colours if available
-		attrData, ok := data.GenDecoAttrs[typeID]
+		attrData, ok := data.GenDecoAttrs[gfxIdx]
 		if ok && len(attrData) >= 2 {
 			aw := int(attrData[0])
 			ah := int(attrData[1])
 			if len(attrData) >= 2+aw*ah {
 				col := x >> 3
 				row := (y - h + 1) >> 3
+				if row < 0 {
+					row = 0
+				}
 				g.buf.SetAttrGrid(col, row, attrData[2:], aw, ah)
 			}
 		}
