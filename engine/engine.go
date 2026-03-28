@@ -977,8 +977,8 @@ func (g *GameEnv) drawHUD() {
 	//   Row 15-17: Inventory (3 item slots)
 
 	// Interior X starts at pixel 200 (col 25), text offset to 208 (col 26)
-	const textX = 208
-	const valX = 208
+	// X=200 = col 25, gives 56px (7 chars) before screen edge
+	const textX = 200
 
 	// TIME (magenta label, white value) — short format to fit panel
 	g.buf.FillAttrArea(25, 3, 6, 1, 0x43)
