@@ -971,10 +971,10 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 		}
 		buf.DrawSpriteWideOR(x, y, w, h, flipped)
 
-	case 2: // 90° CW + h-flip: swap w/h, read column-wise backwards
+	case 2: // 90° CW: bit mask LSB→MSB, start from last column
 		drawRotated90(buf, x, y, w, h, pixels, true, true)
 
-	case 3: // 90° CCW: swap w/h, read column-wise
+	case 3: // 90° CCW: bit mask MSB→LSB, start from first column
 		drawRotated90(buf, x, y, w, h, pixels, false, false)
 
 	case 4: // 180°: draw upward from Y, rows in reverse order
@@ -994,24 +994,72 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 		}
 		buf.DrawSpriteWideOR(x, y, w, h, flipped)
 
-	case 6: // 90° CW + h-flip variant
-		drawRotated90(buf, x, y, w, h, pixels, true, false)
+	case 6: // 270° CW (= 90° CCW from bottom): bit mask LSB→MSB, from last col, start at bottom
+		drawRotated90(buf, x, y, w, h, pixels, true, true)
 
-	case 7: // 90° CCW + flip variant
-		drawRotated90(buf, x, y, w, h, pixels, false, true)
+	case 7: // 270° CCW (= 90° CW from bottom): bit mask MSB→LSB, from first col, start at bottom
+		drawRotated90(buf, x, y, w, h, pixels, false, false)
 
 	default:
 		buf.DrawSpriteWideOR(x, y, w, h, pixels)
 	}
 }
 
-// drawRotated90 draws a sprite rotated 90 degrees.
-// For rotation, width and height swap, and we read the source data column-wise.
-func drawRotated90(buf *screen.Buffer, x, y, w, h int, pixels []byte, cw bool, hflip bool) {
-	// After 90° rotation: new width = h*1-bit-columns mapped to bytes, new height = w*8 pixel rows
-	// This is complex for arbitrary widths. For now, just draw normally as a fallback.
-	// TODO: implement proper 90° rotation for pixel data
-	buf.DrawSpriteWideOR(x, y, w, h, pixels)
+// drawRotated90 draws a sprite rotated 90° by reading columns from source
+// and packing bits into output bytes. Matches the Z80 draw_disp_2/3/6/7
+// functions which use column-based bit extraction with RL H' packing.
+//
+// The source sprite is w bytes wide × h rows. After 90° rotation:
+//   - Output height = w*8 pixel rows (each source byte column becomes 8 output rows)
+//   - Output width = ceil(h/8) bytes (h source rows pack into h/8 output bytes)
+//
+// Parameters:
+//   cw=true:  clockwise (modes 2,6) — bit mask starts at LSB ($01), rotates left
+//   cw=false: counter-clockwise (modes 3,7) — bit mask starts at MSB ($80), rotates right
+//   fromEnd=true: start from last column of source (modes 2,6)
+//   fromEnd=false: start from first column of source (modes 3,7)
+func drawRotated90(buf *screen.Buffer, x, y, w, h int, pixels []byte, cw bool, fromEnd bool) {
+	outW := (h + 7) / 8 // output width in bytes
+	outH := w * 8        // output height in pixel rows
+
+	out := make([]byte, outW*outH)
+
+	for srcCol := 0; srcCol < w; srcCol++ {
+		// Which source column to read
+		col := srcCol
+		if fromEnd {
+			col = w - 1 - srcCol
+		}
+
+		for srcRow := 0; srcRow < h; srcRow++ {
+			srcByte := pixels[srcRow*w+col]
+
+			for bit := 0; bit < 8; bit++ {
+				// Which bit in the source byte
+				var mask byte
+				if cw {
+					mask = 1 << uint(bit) // LSB first for CW
+				} else {
+					mask = 0x80 >> uint(bit) // MSB first for CCW
+				}
+
+				if srcByte&mask == 0 {
+					continue
+				}
+
+				// Output position: each source bit becomes one row in output
+				outRow := srcCol*8 + bit
+				outByte := srcRow / 8
+				outBit := uint(srcRow % 8)
+
+				if outRow < outH && outByte < outW {
+					out[outRow*outW+outByte] |= 0x80 >> outBit
+				}
+			}
+		}
+	}
+
+	buf.DrawSpriteWideOR(x, y, outW, outH, out)
 }
 
 // reverseBits reverses the bit order of a byte (mirror horizontally).
