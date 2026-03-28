@@ -975,53 +975,83 @@ func (g *GameEnv) drawRoom() {
 }
 
 func (g *GameEnv) drawHUD() {
-	g.buf.FillAttrArea(24, 0, 8, 24, 0x47)
+	// Draw scroll border from panel character data
+	g.drawScrollBorder()
 
-	// Score
-	g.buf.DrawString(200, 4, "SCORE")
-	g.buf.DrawString(200, 12, formatBCD(g.score))
+	// Set panel attributes — invert room colour for scroll border
+	panelAttr := g.panelColour()
+	g.buf.FillAttrArea(24, 0, 8, 24, panelAttr)
 
-	// Lives
-	g.buf.DrawString(200, 24, "LIVES")
-	livesStr := make([]byte, g.lives)
-	for i := range livesStr {
-		livesStr[i] = '*'
+	// TIME label and value (magenta label, white value)
+	g.buf.FillAttrArea(25, 3, 6, 1, 0x43) // bright magenta
+	g.buf.DrawString(200, 24, "TIME")
+	g.buf.FillAttrArea(25, 4, 6, 1, 0x47) // bright white
+	g.buf.DrawString(200, 32, formatClock(g.clockH, g.clockM, g.clockS))
+
+	// SCORE label and value
+	g.buf.FillAttrArea(25, 5, 6, 1, 0x43) // bright magenta
+	g.buf.DrawString(200, 40, "SCORE")
+	g.buf.FillAttrArea(25, 6, 6, 1, 0x47) // bright white
+	g.buf.DrawString(200, 48, formatBCD(g.score))
+
+	// Chicken energy bar (yellow, rows 8-12)
+	g.buf.FillAttrArea(25, 8, 6, 4, 0x46) // bright yellow
+	chickenRows := int(g.energy) * 30 / int(InitialEnergy)
+	if chickenRows > 30 {
+		chickenRows = 30
 	}
-	g.buf.DrawString(200, 32, string(livesStr))
-
-	// Energy bar
-	g.buf.DrawString(200, 44, "ENRGY")
-	energyBars := int(g.energy) >> 4
-	barStr := make([]byte, energyBars)
-	for i := range barStr {
-		barStr[i] = '|'
+	// Draw the chicken — full portion from bottom up
+	if chickenRows > 0 {
+		startRow := 30 - chickenRows
+		g.buf.DrawSpriteWideOR(200, 95, 6, chickenRows,
+			data.ChickenFull[startRow*6:])
 	}
-	g.buf.DrawString(200, 52, string(barStr))
 
-	// Clock
-	g.buf.DrawString(200, 64, "TIME")
-	g.buf.DrawString(200, 72, formatClock(g.clockH, g.clockM, g.clockS))
+	// Lives (bright white, rows 13-15)
+	g.buf.FillAttrArea(25, 13, 6, 3, 0x47)
+	for i := byte(0); i < g.lives && i < 3; i++ {
+		lx := 200 + int(i)*16
+		sprites := data.CharacterSprites(g.character)
+		g.buf.DrawSpriteXOR(lx, 119, sprites[data.DirDown][0])
+	}
 
-	// Room + visited
-	g.buf.DrawString(200, 84, "ROOM")
-	g.buf.DrawString(200, 92, formatByte(g.room))
-
-	g.buf.DrawString(200, 104, data.Characters[g.character].Name)
-
-	// Inventory (3 slots)
-	g.buf.DrawString(200, 120, "ITEMS")
+	// Inventory slots (rows 16-18)
 	for i, slot := range g.inventory {
-		y := 128 + i*10
+		ix := 200 + i*16
 		if slot.Occupied {
-			g.buf.DrawString(200, y, slot.Name)
-		} else {
-			g.buf.DrawString(200, y, "-----")
+			g.buf.FillAttrArea(25+i*2, 16, 2, 2, 0x47)
+			g.buf.DrawString(ix, 128, slot.Name[:1])
 		}
 	}
+}
 
-	// Visit percentage
-	g.buf.DrawString(200, 164, "MAP")
-	g.buf.DrawString(200, 172, formatByte(g.visitPercent)+"%")
+// drawScrollBorder renders the ornate scroll border from PanelChars/PanelGrid.
+func (g *GameEnv) drawScrollBorder() {
+	for row := 0; row < 24; row++ {
+		for col := 0; col < 8; col++ {
+			charIdx := data.PanelGrid[row][col]
+			if charIdx == 0 {
+				continue // blank
+			}
+			if int(charIdx) >= len(data.PanelChars) {
+				continue
+			}
+			px := 192 + col*8
+			py := row * 8
+			g.buf.DrawCharFrom(px, py, data.PanelChars[charIdx][:])
+		}
+	}
+}
+
+// panelColour returns the attribute byte for the scroll border.
+// Original Z80: invert room colour, map blue to green.
+func (g *GameEnv) panelColour() byte {
+	ra := data.RoomAttrs[g.room]
+	ink := (^ra.Colour) & 0x07
+	if ink < 2 {
+		ink = 4 // blue/black → green
+	}
+	return ink
 }
 
 // ---------- HELPERS ----------
