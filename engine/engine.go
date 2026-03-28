@@ -945,6 +945,20 @@ func (g *GameEnv) drawDecorations() {
 		// to draw_rot_obj ($9213) for pixels when room not yet drawn ($9212: ret nz).
 		// draw_rot_obj dispatches through $9970 pixel rotation table.
 		// So ALL entity types rendered via h_room_item get pixel rotation.
+		// Clip: skip decorations that would overflow into HUD (x + width > 192)
+		if x+w*8 > 192 {
+			w = (192 - x) / 8
+			if w <= 0 {
+				continue
+			}
+			// Trim pixel data to clipped width
+			clipped := make([]byte, w*h)
+			for row := 0; row < h; row++ {
+				copy(clipped[row*w:], pixels[row*int(sprData[0]):row*int(sprData[0])+w])
+			}
+			pixels = clipped
+		}
+
 		mode := (int(e[5]) >> 5) & 0x07
 		drawDecoSprite(&g.buf, x, y, w, h, pixels, mode)
 	}
@@ -975,12 +989,12 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 		}
 		buf.DrawSpriteWideOR(x, y, w, h, flipped)
 
-	case 2: // 90° CW
-		ow, oh, op := rotateCW(w, h, pixels)
+	case 2: // 90° CW (visually, accounting for bottom-to-top sprite data)
+		ow, oh, op := rotateCCW(w, h, pixels)
 		buf.DrawSpriteWideOR(x, y, ow, oh, op)
 
-	case 3: // 90° CCW
-		ow, oh, op := rotateCCW(w, h, pixels)
+	case 3: // 90° CCW (visually, accounting for bottom-to-top sprite data)
+		ow, oh, op := rotateCW(w, h, pixels)
 		buf.DrawSpriteWideOR(x, y, ow, oh, op)
 
 	case 4: // 180°: draw upward from Y, rows in reverse order
@@ -1000,16 +1014,16 @@ func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int)
 		}
 		buf.DrawSpriteWideOR(x, y, w, h, flipped)
 
-	case 6: // 270° CW = 90° CW + 180°
-		ow, oh, op := rotateCW(w, h, pixels)
+	case 6: // 270° CW (visually) = CCW + 180°
+		ow, oh, op := rotateCCW(w, h, pixels)
 		flipped := make([]byte, len(op))
 		for row := 0; row < oh; row++ {
 			copy(flipped[row*ow:(row+1)*ow], op[(oh-1-row)*ow:(oh-row)*ow])
 		}
 		buf.DrawSpriteWideOR(x, y, ow, oh, flipped)
 
-	case 7: // 270° CCW = 90° CCW + 180°
-		ow, oh, op := rotateCCW(w, h, pixels)
+	case 7: // 270° CCW (visually) = CW + 180°
+		ow, oh, op := rotateCW(w, h, pixels)
 		flipped := make([]byte, len(op))
 		for row := 0; row < oh; row++ {
 			copy(flipped[row*ow:(row+1)*ow], op[(oh-1-row)*ow:(oh-row)*ow])

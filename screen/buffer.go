@@ -227,18 +227,8 @@ func (b *Buffer) DrawSpriteWideOR(x, y, widthBytes, height int, data []byte) {
 		base := int(yTable[py]) + col
 		rowData := data[row*widthBytes : row*widthBytes+widthBytes]
 
-		// Clip to play area (columns 0-23, pixel X 0-191)
-		maxCol := 24 - col // max bytes we can write before hitting HUD
-		if maxCol <= 0 {
-			continue
-		}
-		drawW := widthBytes
-		if drawW > maxCol {
-			drawW = maxCol
-		}
-
 		if shift == 0 {
-			for c := 0; c < drawW; c++ {
+			for c := 0; c < widthBytes; c++ {
 				a := base + c
 				if a >= 0 && a < DisplaySize {
 					b.Pixels[a] |= rowData[c]
@@ -246,20 +236,18 @@ func (b *Buffer) DrawSpriteWideOR(x, y, widthBytes, height int, data []byte) {
 			}
 		} else {
 			a := base
-			if a >= 0 && a < DisplaySize && col >= 0 {
+			if a >= 0 && a < DisplaySize {
 				b.Pixels[a] |= rowData[0] >> shift
 			}
-			for c := 1; c < drawW; c++ {
+			for c := 1; c < widthBytes; c++ {
 				a = base + c
 				if a >= 0 && a < DisplaySize {
 					b.Pixels[a] |= (rowData[c-1] << (8 - shift)) | (rowData[c] >> shift)
 				}
 			}
-			if drawW < widthBytes || col+drawW < 24 {
-				a = base + drawW
-				if a >= 0 && a < DisplaySize && col+drawW < 24 {
-					b.Pixels[a] |= rowData[drawW-1] << (8 - shift)
-				}
+			a = base + widthBytes
+			if a >= 0 && a < DisplaySize {
+				b.Pixels[a] |= rowData[widthBytes-1] << (8 - shift)
 			}
 		}
 	}
