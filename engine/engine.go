@@ -941,12 +941,12 @@ func (g *GameEnv) drawDecorations() {
 		pixels := sprData[2:]
 
 		// Draw mode from bits 7-5 of attr byte (Z80 extracts via rlca×3 & $07).
-		// Only standard decorations use the 8-mode rotation system via h_room_item.
-		// Special entity types (doors 0x01-0x0F, ACG exit 0x24, traps 0x18-0x19)
-		// have their own handlers that don't use the mode dispatch.
-		mode := 0
-		if typeID > 0x0F && typeID != 0x24 && typeID != 0x18 && typeID != 0x19 {
-			mode = (int(e[5]) >> 5) & 0x07
+		// Most decorations use h_room_item which dispatches via mode.
+		// Door entities (types 0x01-0x0F) also use rotation modes for wall orientation.
+		// Type $24 (ACG exit) and $25 have special handlers — force mode 0.
+		mode := (int(e[5]) >> 5) & 0x07
+		if typeID == 0x24 || typeID == 0x25 {
+			mode = 0
 		}
 		drawDecoSprite(&g.buf, x, y, w, h, pixels, mode)
 	}
