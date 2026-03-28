@@ -17,10 +17,11 @@ func init() {
 	SerfSprites = GenSerfSprites
 
 	// Replace room attributes
+	// GenRoomAttrs[i] = [style, colour] (extracted as hi,lo from defw)
 	for i := 0; i < NumRooms && i < len(GenRoomAttrs); i++ {
 		RoomAttrs[i] = RoomAttr{
-			Colour: GenRoomAttrs[i][0],
-			Style:  GenRoomAttrs[i][1],
+			Colour: GenRoomAttrs[i][1],
+			Style:  GenRoomAttrs[i][0],
 		}
 	}
 }
