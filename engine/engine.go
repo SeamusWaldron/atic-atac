@@ -939,11 +939,87 @@ func (g *GameEnv) drawDecorations() {
 			continue
 		}
 		pixels := sprData[2:]
-		g.buf.DrawSpriteWideOR(x, y, w, h, pixels)
 
-		// TODO: attribute painting disabled for debugging
-		_ = data.GenDecoAttrs
+		// Draw mode from bits 7-5 of attr byte (Z80 extracts via rlca×3 & $07)
+		mode := (int(e[5]) >> 5) & 0x07
+		drawDecoSprite(&g.buf, x, y, w, h, pixels, mode)
 	}
+}
+
+// drawDecoSprite renders a decoration sprite with orientation mode 0-7.
+// Mode is derived from bits 7-5 of the entity's attr byte.
+//
+// Mode 0: Normal (upward from Y, left-to-right)
+// Mode 1: Horizontal flip (upward, right-to-left bytes)
+// Mode 2: 90° CW + h-flip (rotated)
+// Mode 3: 90° CCW (rotated)
+// Mode 4: 180° (downward from Y, left-to-right = vertical flip)
+// Mode 5: 180° + h-flip (downward, right-to-left)
+// Mode 6: 90° CW + h-flip variant
+// Mode 7: 90° CCW + flip variant
+func drawDecoSprite(buf *screen.Buffer, x, y, w, h int, pixels []byte, mode int) {
+	switch mode {
+	case 0: // Normal: draw upward from Y, left-to-right
+		buf.DrawSpriteWideOR(x, y, w, h, pixels)
+
+	case 1: // Horizontal flip: upward from Y, reverse bytes per row
+		flipped := make([]byte, len(pixels))
+		for row := 0; row < h; row++ {
+			for col := 0; col < w; col++ {
+				flipped[row*w+col] = reverseBits(pixels[row*w+(w-1-col)])
+			}
+		}
+		buf.DrawSpriteWideOR(x, y, w, h, flipped)
+
+	case 2: // 90° CW + h-flip: swap w/h, read column-wise backwards
+		drawRotated90(buf, x, y, w, h, pixels, true, true)
+
+	case 3: // 90° CCW: swap w/h, read column-wise
+		drawRotated90(buf, x, y, w, h, pixels, false, false)
+
+	case 4: // 180°: draw upward from Y, rows in reverse order
+		reversed := make([]byte, len(pixels))
+		for row := 0; row < h; row++ {
+			copy(reversed[row*w:(row+1)*w], pixels[(h-1-row)*w:(h-row)*w])
+		}
+		buf.DrawSpriteWideOR(x, y, w, h, reversed)
+
+	case 5: // 180° + h-flip: rows reversed AND bytes reversed
+		flipped := make([]byte, len(pixels))
+		for row := 0; row < h; row++ {
+			srcRow := h - 1 - row
+			for col := 0; col < w; col++ {
+				flipped[row*w+col] = reverseBits(pixels[srcRow*w+(w-1-col)])
+			}
+		}
+		buf.DrawSpriteWideOR(x, y, w, h, flipped)
+
+	case 6: // 90° CW + h-flip variant
+		drawRotated90(buf, x, y, w, h, pixels, true, false)
+
+	case 7: // 90° CCW + flip variant
+		drawRotated90(buf, x, y, w, h, pixels, false, true)
+
+	default:
+		buf.DrawSpriteWideOR(x, y, w, h, pixels)
+	}
+}
+
+// drawRotated90 draws a sprite rotated 90 degrees.
+// For rotation, width and height swap, and we read the source data column-wise.
+func drawRotated90(buf *screen.Buffer, x, y, w, h int, pixels []byte, cw bool, hflip bool) {
+	// After 90° rotation: new width = h*1-bit-columns mapped to bytes, new height = w*8 pixel rows
+	// This is complex for arbitrary widths. For now, just draw normally as a fallback.
+	// TODO: implement proper 90° rotation for pixel data
+	buf.DrawSpriteWideOR(x, y, w, h, pixels)
+}
+
+// reverseBits reverses the bit order of a byte (mirror horizontally).
+func reverseBits(b byte) byte {
+	b = (b&0xF0)>>4 | (b&0x0F)<<4
+	b = (b&0xCC)>>2 | (b&0x33)<<2
+	b = (b&0xAA)>>1 | (b&0x55)<<1
+	return b
 }
 
 func (g *GameEnv) drawWeapon() {
