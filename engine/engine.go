@@ -900,17 +900,41 @@ func (g *GameEnv) drawEntities() {
 }
 
 func (g *GameEnv) drawDecorations() {
-	entities := data.RoomEntityList[g.room]
-	for _, re := range entities {
-		dec := data.GetDecoration(re.Type)
-		if dec == nil {
+	entities := data.GenRoomEntityData[int(g.room)]
+	for _, e := range entities {
+		typeID := int(e[0])
+		eRoom := e[1]
+		x := int(e[3])
+		y := int(e[4])
+
+		// Only draw entities that belong to this room
+		if eRoom != g.room && eRoom != 0 {
 			continue
 		}
-		g.buf.DrawSpriteWideOR(int(re.X), int(re.Y), dec.WidthBytes, dec.Height, dec.Pixels)
-		if dec.Attrs != nil {
-			col := int(re.X) >> 3
-			row := (int(re.Y) - dec.Height + 1) >> 3
-			g.buf.SetAttrGrid(col, row, dec.Attrs, dec.AttrW, dec.AttrH)
+
+		// Look up sprite data from the generated gfx_data table
+		sprData, ok := data.GenDecoSprites[typeID]
+		if !ok || len(sprData) < 2 {
+			continue
+		}
+		w := int(sprData[0])
+		h := int(sprData[1])
+		if w == 0 || h == 0 || len(sprData) < 2+w*h {
+			continue
+		}
+		pixels := sprData[2:]
+		g.buf.DrawSpriteWideOR(x, y, w, h, pixels)
+
+		// Apply attribute colours if available
+		attrData, ok := data.GenDecoAttrs[typeID]
+		if ok && len(attrData) >= 2 {
+			aw := int(attrData[0])
+			ah := int(attrData[1])
+			if len(attrData) >= 2+aw*ah {
+				col := x >> 3
+				row := (y - h + 1) >> 3
+				g.buf.SetAttrGrid(col, row, attrData[2:], aw, ah)
+			}
 		}
 	}
 }

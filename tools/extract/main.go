@@ -47,6 +47,7 @@ func main() {
 	genPlayerSprites()
 	genCreatureSprites()
 	genItemData()
+	genRoomEntities()
 }
 
 func countSet() int {
@@ -590,6 +591,53 @@ func genItemData() {
 		b := getBytes(addr, 8)
 		fmt.Fprintf(f, "\t{0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X},\n",
 			b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7])
+	}
+	fmt.Fprintln(f, "}")
+}
+
+func genRoomEntities() {
+	f := createFile("data/gen_roomentities.go")
+	defer f.Close()
+
+	fmt.Fprintln(f, "package data")
+	fmt.Fprintln(f, "")
+	fmt.Fprintln(f, "// Auto-generated from aticatac.skool — do not edit.")
+	fmt.Fprintln(f, "")
+	fmt.Fprintln(f, "// GenRoomEntityData: per-room entity records.")
+	fmt.Fprintln(f, "// Each entity is [type, room, flags, x, y, attr, p1, p2] (8 bytes).")
+	fmt.Fprintln(f, "// Extracted by following room_table pointers to entity pointer lists,")
+	fmt.Fprintln(f, "// then reading the 8-byte entity at each pointer address.")
+	fmt.Fprintln(f, "var GenRoomEntityData = map[int][][8]byte{")
+
+	roomTableBase := uint16(0x757D)
+	for room := 0; room < 150; room++ {
+		roomPtr := getWord(roomTableBase + uint16(room*2))
+		if roomPtr == 0 {
+			continue
+		}
+
+		var entities [][8]byte
+		cur := roomPtr
+		for {
+			entityPtr := getWord(cur)
+			if entityPtr == 0 {
+				break
+			}
+			cur += 2
+
+			// Read 8-byte entity record at the pointer address
+			b := getBytes(entityPtr, 8)
+			entities = append(entities, [8]byte{b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]})
+		}
+
+		if len(entities) > 0 {
+			fmt.Fprintf(f, "\t%d: {\n", room)
+			for _, e := range entities {
+				fmt.Fprintf(f, "\t\t{0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X},\n",
+					e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7])
+			}
+			fmt.Fprintln(f, "\t},")
+		}
 	}
 	fmt.Fprintln(f, "}")
 }
