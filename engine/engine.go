@@ -948,38 +948,28 @@ func (g *GameEnv) drawDecorations() {
 		mode := (int(e[5]) >> 5) & 0x07
 		drawDecoSprite(&g.buf, x, y, w, h, pixels, mode)
 
-		// Apply decoration attribute colours.
-		// The attr data from gfx_attrs has per-cell colours. For now, use a
-		// simplified approach: look up attr data, paint at entity position.
-		// $FF in attr data means use the room colour, $00 means skip.
-		attrData, hasAttr := data.GenDecoAttrs[gfxIdx]
-		if hasAttr && len(attrData) >= 2 {
-			aw := int(attrData[0])
-			ah := int(attrData[1])
-			if len(attrData) >= 2+aw*ah {
-				roomAttr := data.RoomAttrs[g.room].Colour
-				// Attr position: entity Y is bottom of sprite, so top is Y-spriteHeight
-				// Character cell coords from pixel position
-				acol := x >> 3
-				arow := (y - h) >> 3
-				if arow < 0 {
-					arow = 0
-				}
-				for ar := 0; ar < ah; ar++ {
-					for ac := 0; ac < aw; ac++ {
-						av := attrData[2+ar*aw+ac]
-						if av == 0x00 {
-							continue // skip transparent
-						}
-						if av == 0xFF {
-							av = roomAttr // use room colour
-						}
-						cr := arow + ar
-						cc := acol + ac
-						if cr >= 0 && cr < 24 && cc >= 0 && cc < 24 {
-							g.buf.Attrs[cr*32+cc] = av
-						}
-					}
+		// Simple entity colouring: use the lower 5 bits of the attr byte
+		// (bits 4-0 = BRIGHT + PAPER + INK) as the attribute for cells
+		// the sprite covers. This gives each decoration its correct colour
+		// without needing mode-aware attr grid painting.
+		entityAttr := e[5] & 0x7F // strip the mode bits (7-5), keep colour
+		if entityAttr != 0 {
+			// Calculate which character cells the sprite covers
+			// Sprite drawn upward from y, so top = y - spriteH + 1
+			topY := y - h + 1
+			if topY < 0 {
+				topY = 0
+			}
+			cellTop := topY >> 3
+			cellBot := y >> 3
+			cellLeft := x >> 3
+			cellRight := (x + w*8 - 1) >> 3
+			if cellRight > 23 {
+				cellRight = 23
+			}
+			for cr := cellTop; cr <= cellBot && cr < 24; cr++ {
+				for cc := cellLeft; cc <= cellRight && cc < 32; cc++ {
+					g.buf.Attrs[cr*32+cc] = entityAttr
 				}
 			}
 		}
