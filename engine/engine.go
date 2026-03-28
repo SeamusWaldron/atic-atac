@@ -925,7 +925,7 @@ func (g *GameEnv) clearDoorFrameLines() {
 		}
 
 		x := int(e[3])
-		y := int(e[4]) - 1 // match the dec d in h_room_item ($9204)
+		y := int(e[4]) // raw Y without the dec d adjustment
 
 		onTop := y < roomCentreY-rh
 		onBottom := y > roomCentreY+rh
@@ -943,13 +943,7 @@ func (g *GameEnv) clearDoorFrameLines() {
 			sprH = 32
 		}
 		if onTop || onBottom || onLeft || onRight {
-			// Top/bottom doors: shift clear area down by 2px to align
-			// with where the frame line actually sits relative to the sprite.
-			yOff := 0
-			if onTop || onBottom {
-				yOff = 2
-			}
-			for py := y - sprH + 1 + yOff; py <= y+yOff; py++ {
+			for py := y - sprH + 1; py <= y; py++ {
 				for px := x; px < x+sprW; px++ {
 					g.buf.ClearPixel(px, py)
 				}
