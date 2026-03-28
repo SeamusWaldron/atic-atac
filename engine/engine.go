@@ -191,19 +191,40 @@ func (g *GameEnv) movePlayer(act action.Action) {
 	}
 }
 
-// roomBounds returns the playable area bounds from the inner frame points.
+// roomBounds computes the playable area from all room frame points.
+// Takes the bounding box of every vertex and insets by a margin.
 func (g *GameEnv) roomBounds(style data.RoomStyle) (minX, minY, maxX, maxY byte) {
-	minX = 0x20
-	minY = 0x20
-	maxX = 0xA0
-	maxY = 0xA0
-
 	pts := style.Points
-	if len(pts) >= 8 {
-		minX = pts[5].X
-		minY = pts[5].Y
-		maxX = pts[6].X
-		maxY = pts[4].Y
+	if len(pts) == 0 {
+		return 0x20, 0x20, 0xA0, 0xA0
+	}
+
+	loX, loY := pts[0].X, pts[0].Y
+	hiX, hiY := pts[0].X, pts[0].Y
+	for _, p := range pts[1:] {
+		if p.X < loX {
+			loX = p.X
+		}
+		if p.Y < loY {
+			loY = p.Y
+		}
+		if p.X > hiX {
+			hiX = p.X
+		}
+		if p.Y > hiY {
+			hiY = p.Y
+		}
+	}
+
+	// Inset by 8 pixels so the player stays inside the frame
+	const margin = 8
+	minX = loX + margin
+	minY = loY + margin
+	if hiX > margin {
+		maxX = hiX - margin
+	}
+	if hiY > margin {
+		maxY = hiY - margin
 	}
 	return
 }
