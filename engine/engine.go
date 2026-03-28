@@ -251,7 +251,6 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	g.clearPlayArea()
 	g.drawRoom()
 	g.drawDecorations()
-	g.drawDoors()
 	g.drawEntities()
 	g.drawWeapon()
 	g.drawPlayer()
@@ -918,15 +917,14 @@ func (g *GameEnv) drawDecorations() {
 		x := int(e[3])
 		y := int(e[4]) - 1 // Z80 does dec d ($9204) before rendering
 
-		// Skip door types (0x01-0x0F) — doors are handled separately
-		// and types with flags byte $34 that are doors
-		if typeID <= 0x0F {
-			continue
-		}
-
 		// gfx_data index is type-1 (Z80 does dec c at $9998)
 		gfxIdx := typeID - 1
 		if gfxIdx < 0 || gfxIdx >= 39 {
+			continue
+		}
+
+		// Skip chicken sprites (gfx types 18/19 = HUD energy bar, not room decor)
+		if gfxIdx == 18 || gfxIdx == 19 {
 			continue
 		}
 
