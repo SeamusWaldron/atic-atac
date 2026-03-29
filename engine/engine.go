@@ -238,7 +238,9 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	g.updateCreatures()
 	g.checkCreaturePlayerCollision()
 
-	// Item pickup
+	// Food auto-consumption on contact (Z80 h_food at $8C63)
+	g.checkFoodPickup()
+	// Key/collectible pickup on Enter key
 	g.checkPickup(act)
 
 	// Passive energy drain: 1 point every 16 frames (original: $0F mask check)
@@ -816,6 +818,31 @@ func (g *GameEnv) spawnItems() {
 	}
 }
 
+// checkFoodPickup auto-consumes food on contact — no key press needed.
+// Z80 h_food at $8C63: adds $40 (64) energy, caps at $F0 (240).
+func (g *GameEnv) checkFoodPickup() {
+	px := int(g.playerX)
+	py := int(g.playerY)
+	const touchDist = 12 // same as creature collision distance
+
+	g.entities.ForEachInRoom(g.room, func(e *entity.Entity) {
+		if e.Type != entity.TypeFood {
+			return
+		}
+		if abs(px-e.X) >= touchDist || abs(py-e.Y) >= touchDist {
+			return
+		}
+		// Auto-consume: +$40 (64) energy, cap at $F0 (240)
+		g.energy += 64
+		if g.energy > InitialEnergy {
+			g.energy = InitialEnergy
+		}
+		e.Active = false
+		g.hudDirty = true
+	})
+}
+
+// checkPickup handles key/collectible pickup on Enter key press.
 func (g *GameEnv) checkPickup(act action.Action) {
 	if act&action.Pickup == 0 {
 		return
@@ -826,8 +853,7 @@ func (g *GameEnv) checkPickup(act action.Action) {
 	const pickupDist = 16
 
 	g.entities.ForEachInRoom(g.room, func(e *entity.Entity) {
-		if e.Type != entity.TypeKey && e.Type != entity.TypeFood &&
-			e.Type != entity.TypeCollectible {
+		if e.Type != entity.TypeKey && e.Type != entity.TypeCollectible {
 			return
 		}
 		if abs(px-e.X) >= pickupDist || abs(py-e.Y) >= pickupDist {
@@ -835,22 +861,11 @@ func (g *GameEnv) checkPickup(act action.Action) {
 		}
 
 		switch e.Type {
-		case entity.TypeFood:
-			// Food restores energy directly (no inventory slot needed)
-			g.energy += 48
-			if g.energy > InitialEnergy {
-				g.energy = InitialEnergy
-			}
-			g.score += 50
-			e.Active = false
-
 		case entity.TypeCollectible:
-			// Collectibles give score
 			g.score += 100
 			e.Active = false
 
 		case entity.TypeKey:
-			// Keys go into inventory
 			slot := g.findFreeSlot()
 			if slot < 0 {
 				return // inventory full
