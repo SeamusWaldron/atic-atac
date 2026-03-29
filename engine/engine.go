@@ -375,7 +375,10 @@ func (g *GameEnv) spawnCreatures() {
 	if g.nextRand()&0x0F != 0 {
 		return
 	}
-	if g.entities.CountInRoom(g.room, entity.TypeCreature) >= entity.MaxCreaturesPerRoom {
+	// Count both active creatures AND spawning sparkles toward the limit
+	creatureCount := g.entities.CountInRoom(g.room, entity.TypeCreature) +
+		g.entities.CountInRoom(g.room, entity.TypeSpawning)
+	if creatureCount >= entity.MaxCreaturesPerRoom {
 		return
 	}
 
