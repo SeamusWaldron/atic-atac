@@ -113,7 +113,10 @@ func (g *GameEnv) Reset() {
 	g.playerDir = data.DirDown
 	g.walkCounter = 0
 	g.weaponActive = false
-	g.spawnDelay = 32
+	// Z80: creature_delay starts at 0, last_creat_room starts at 0.
+	// Room 0 matches last_creat_room so no 32-frame delay is applied.
+	// Creatures spawn via 1/16 random chance immediately.
+	g.spawnDelay = 0
 	g.entities.Clear()
 	g.inventory = [3]InvSlot{}
 	g.clockH, g.clockM, g.clockS = 0, 0, 0
@@ -367,11 +370,8 @@ func (g *GameEnv) spawnCreatures() {
 		g.spawnDelay--
 		return
 	}
-	// Original: only check spawn on every 4th frame, then 1/16 random chance.
-	// At 50fps this gives roughly one spawn attempt every 1.3 seconds.
-	if g.frame&0x03 != 0 {
-		return
-	}
+	// Z80 chk_creatures at $83EA: 1/16 random chance per frame (no frame gating).
+	// Uses R register AND $0F — spawn if result is 0.
 	if g.nextRand()&0x0F != 0 {
 		return
 	}
