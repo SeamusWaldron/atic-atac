@@ -93,6 +93,7 @@ type GameEnv struct {
 	// Bit 0 = open(1)/closed(0). XOR $01 toggles state.
 	doorTypes      map[uint32]byte
 	doorCycleTimer int
+	doorCycleIdx   int // round-robin index for which door to toggle next
 
 	// Rendering
 	roomDrawn bool
@@ -638,11 +639,10 @@ func (g *GameEnv) cycleDoors() {
 	}
 	g.doorCycleTimer = 94
 
-	// Z80: each door entity checks the shared timer. The FIRST door whose
-	// handler runs when timer=0 toggles itself and resets the timer.
-	// Since entities process in order, this always toggles the first
-	// managed door in the room's entity list.
+	// Collect all managed doors in this room, then toggle the next one
+	// in round-robin order so all doors get a chance to cycle.
 	entities := data.GenRoomEntityData[int(g.room)]
+	var doorKeys []uint32
 	for i, pair := range entities {
 		for side := 0; side < 2; side++ {
 			var e [8]byte
@@ -655,15 +655,16 @@ func (g *GameEnv) cycleDoors() {
 				continue
 			}
 			key := uint32(g.room)<<16 | uint32(i)
-			rt, ok := g.doorTypes[key]
-			if !ok {
-				continue
+			if rt, ok := g.doorTypes[key]; ok && rt >= 0x20 && rt <= 0x23 {
+				doorKeys = append(doorKeys, key)
 			}
-			if rt >= 0x20 && rt <= 0x23 {
-				g.doorTypes[key] = rt ^ 0x01
-				return // only ONE door toggles per timer expiry
-			}
+			break // one entry per pair
 		}
+	}
+	if len(doorKeys) > 0 {
+		idx := g.doorCycleIdx % len(doorKeys)
+		g.doorTypes[doorKeys[idx]] ^= 0x01
+		g.doorCycleIdx++
 	}
 }
 
