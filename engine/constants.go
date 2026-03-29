@@ -13,9 +13,11 @@ const (
 type GameState byte
 
 const (
-	StateMenu    GameState = 0
-	StatePlaying GameState = 1
-	StateDead    GameState = 2
+	StateMenu     GameState = 0
+	StatePlaying  GameState = 1
+	StateDead     GameState = 2
 	StateGameOver GameState = 3
-	StateWin     GameState = 4
+	StateWin      GameState = 4
+	StateDying    GameState = 5 // death shrink animation
+	StateSpawning GameState = 6 // materialise animation
 )

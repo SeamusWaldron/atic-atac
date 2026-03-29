@@ -47,13 +47,17 @@ type GameEnv struct {
 	frame     uint32 // global frame counter
 
 	// Player
-	playerX     byte
-	playerY     byte
-	playerDir   int
-	walkCounter int
-	moving      bool
-	lastDX      int // movement delta from last frame (for weapon direction)
-	lastDY      int
+	playerX       byte
+	playerY       byte
+	playerDir     int
+	walkCounter   int
+	moving        bool
+	lastDX        int // movement delta from last frame (for weapon direction)
+	lastDY        int
+	playerAnim    int // >0: spawning (height grows), <0: dying (height shrinks)
+	playerAnimH   int // current visible height during animation
+	playerAnimClr byte // colour cycle during spawn animation
+	deathX, deathY byte // position where player died (for tombstone)
 
 	// Entities
 	entities   *entity.Pool
@@ -146,7 +150,9 @@ func (g *GameEnv) Buffer() *screen.Buffer { return &g.buf }
 
 // StartGame transitions from menu to playing state.
 func (g *GameEnv) StartGame() {
-	g.state = StatePlaying
+	g.state = StateSpawning // start with materialise animation
+	g.playerAnimH = 0
+	g.playerAnimClr = 1
 	g.roomDrawn = false
 	g.hudDirty = true
 	g.entities.Clear()
@@ -175,6 +181,10 @@ func (g *GameEnv) Step(act action.Action) StepResult {
 	switch g.state {
 	case StatePlaying:
 		g.stepPlaying(act)
+	case StateDying:
+		g.stepDying()
+	case StateSpawning:
+		g.stepSpawning()
 	case StateDead:
 		g.stepDead()
 	}
@@ -263,24 +273,129 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	g.drawHUD()
 }
 
-// stepDead handles the death animation.
-func (g *GameEnv) stepDead() {
+// stepDying handles the death shrink animation.
+// Z80 h_death at $8D45: player height decreases each frame (3/4 rate).
+func (g *GameEnv) stepDying() {
 	g.frame++
-	// Simple death pause then respawn or game over
-	if g.frame%60 == 0 {
+
+	// Shrink every other frame (Z80 uses 3/4 rate)
+	if g.frame&0x01 == 0 {
+		g.playerAnimH--
+	}
+
+	// Render: room + decorations + shrinking player
+	g.clearPlayArea()
+	g.drawRoom()
+	g.drawDecorations()
+	g.drawEntities()
+
+	// Draw player at shrinking height
+	if g.playerAnimH > 0 {
+		sprites := data.CharacterSprites(g.character)
+		sprData := sprites[g.playerDir][0]
+		fullH := int(sprData[0])
+		// Draw only the bottom 'playerAnimH' rows of the sprite
+		if g.playerAnimH <= fullH {
+			partialData := make([]byte, 1+g.playerAnimH*2)
+			partialData[0] = byte(g.playerAnimH)
+			copy(partialData[1:], sprData[1:1+g.playerAnimH*2])
+			g.buf.DrawSpriteXOR(int(g.playerX), int(g.playerY), partialData)
+			g.paintEntityAttr(int(g.playerX), int(g.playerY), 2, g.playerAnimH, 0x47)
+		}
+	}
+
+	// When fully shrunk: place tombstone and transition
+	if g.playerAnimH <= 0 {
+		// Place tombstone at death position (graphic $8F, attr $45 = bright cyan)
+		tombstoneGfx := byte(0x8F)
+		flatIdx := int(tombstoneGfx) - 1
+		group := flatIdx / 4
+		frame := flatIdx % 4
+		if group < len(data.GenSpriteTable) {
+			addr := data.GenSpriteTable[group][frame]
+			if spr := data.GenMenuIcons[addr]; spr != nil {
+				g.buf.DrawSpriteXOR(int(g.deathX), int(g.deathY), spr)
+				g.paintEntityAttr(int(g.deathX), int(g.deathY), 2, int(spr[0]), 0x45)
+			}
+		}
+
 		if g.lives == 0 {
 			g.state = StateGameOver
 		} else {
-			g.state = StatePlaying
-			g.roomDrawn = false
-			g.hudDirty = true
-			g.playerX = 0x60
-			g.playerY = 0x60
-			g.energy = InitialEnergy
-			g.weaponActive = false
-			g.entities.Clear()
+			g.state = StateDead // brief pause before respawn
 		}
 	}
+
+	g.clearHUDArea()
+	g.drawHUD()
+}
+
+// stepDead handles the pause between death and respawn.
+func (g *GameEnv) stepDead() {
+	g.frame++
+	if g.frame%30 == 0 { // half-second pause
+		// Start spawn materialise animation
+		g.state = StateSpawning
+		g.roomDrawn = false
+		g.hudDirty = true
+		g.playerX = 0x60
+		g.playerY = 0x60
+		g.energy = InitialEnergy
+		g.weaponActive = false
+		g.playerAnimH = 0 // start at zero height, grow upward
+		g.playerAnimClr = 1 // start colour cycle
+	}
+}
+
+// stepSpawning handles the materialise animation.
+// Z80 h_player_appear at $8CB7: height grows, colour cycles.
+func (g *GameEnv) stepSpawning() {
+	g.frame++
+
+	sprites := data.CharacterSprites(g.character)
+	sprData := sprites[data.DirDown][0]
+	fullH := int(sprData[0])
+
+	// Grow height every other frame
+	if g.frame&0x01 == 0 {
+		g.playerAnimH++
+	}
+
+	// Cycle colour every 4 frames (Z80: and $03)
+	if g.frame&0x03 == 0 {
+		g.playerAnimClr++
+		if g.playerAnimClr > 7 {
+			g.playerAnimClr = 1
+		}
+	}
+
+	// Render
+	g.clearPlayArea()
+	g.drawRoom()
+	g.drawDecorations()
+	g.drawEntities()
+
+	// Draw player at growing height with cycling colour
+	if g.playerAnimH > 0 && g.playerAnimH <= fullH {
+		partialData := make([]byte, 1+g.playerAnimH*2)
+		partialData[0] = byte(g.playerAnimH)
+		copy(partialData[1:], sprData[1:1+g.playerAnimH*2])
+		g.buf.DrawSpriteXOR(int(g.playerX), int(g.playerY), partialData)
+		// Colour: bright + cycling ink
+		attr := byte(0x40) | g.playerAnimClr
+		g.paintEntityAttr(int(g.playerX), int(g.playerY), 2, g.playerAnimH, attr)
+	}
+
+	// When fully grown: switch to playing
+	if g.playerAnimH >= fullH {
+		g.state = StatePlaying
+		g.playerDir = data.DirDown
+		g.roomDrawn = false
+		g.spawnDelay = 32
+	}
+
+	g.clearHUDArea()
+	g.drawHUD()
 }
 
 // nextRand returns a pseudo-random byte.
@@ -491,7 +606,13 @@ func (g *GameEnv) playerDeath() {
 	if g.lives > 0 {
 		g.lives--
 	}
-	g.state = StateDead
+	// Start death shrink animation (Z80 h_death at $8D45)
+	g.state = StateDying
+	g.deathX = g.playerX
+	g.deathY = g.playerY
+	sprites := data.CharacterSprites(g.character)
+	sprData := sprites[g.playerDir][0]
+	g.playerAnimH = int(sprData[0]) // start at full height
 	g.hudDirty = true
 }
 
