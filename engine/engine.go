@@ -1014,20 +1014,7 @@ func (g *GameEnv) drawDecorations() {
 		// Attribute painting: h_room_item uses Y-1 for attrs (dec d at $9204).
 		// xy_to_attr maps pixel (X, Y-1) to character cell (X/8, (Y-1)/8).
 		// Attr data paints UPWARD from that cell (sbc hl, $0020 in Z80).
-		// For side-wall locked doors (rotation modes 3,6,7 with locked door
-		// types 0x08-0x0F), use plain door frame attrs (gfxIdx 1) instead
-		// of lock-specific attrs. In the original, lock-colour cells land on
-		// pixels-free cells (the arch opening) and are invisible. Our pixel
-		// rotation differs slightly, making them visible. Using door frame
-		// attrs ($43 border + $00 skip) matches the original's visual output.
-		attrGfxIdx := gfxIdx
-		if (mode == 3 || mode == 6 || mode == 7) && typeID >= 0x08 && typeID <= 0x0F {
-			if frameAttr, ok := data.GenDecoAttrs[1]; ok {
-				_ = frameAttr
-				attrGfxIdx = 1 // use plain door frame attrs
-			}
-		}
-		attrData, hasAttr := data.GenDecoAttrs[attrGfxIdx]
+		attrData, hasAttr := data.GenDecoAttrs[gfxIdx]
 		if hasAttr && len(attrData) >= 2 {
 			aw := int(attrData[0])
 			ah := int(attrData[1])
@@ -1046,7 +1033,7 @@ func (g *GameEnv) drawDecorations() {
 
 // paintDecoAttrs paints a decoration's per-cell attribute grid.
 // Starts at (startCol, startRow) and paints UPWARD (decreasing row).
-// Mode controls iteration order (0=normal, 4=reversed data, others=rotation).
+// Mode controls iteration order matching the Z80 draw_attr_0 through draw_attr_7.
 //
 // For non-rotation modes (0,1,4,5): outer=ah rows, inner=aw columns.
 // For rotation modes (2,3,6,7): outer=aw rows, inner=ah columns.
@@ -1064,34 +1051,41 @@ func paintDecoAttrs(buf *screen.Buffer, startCol, startRow, aw, ah int,
 
 	for outer := 0; outer < outerCount; outer++ {
 		for inner := 0; inner < innerCount; inner++ {
-			var dataIdx int
+			// Map screen cell to source data index based on mode.
+			// The source data is aw columns × ah rows.
+			// Screen cell is at (startCol+inner, startRow-outer).
+			var srcCol, srcRow int
 			switch mode {
-			case 0:
-				dataIdx = outer*aw + inner
-			case 1:
-				dataIdx = outer*aw + (aw - 1 - inner)
-			case 4:
-				dataIdx = (ah-1-outer)*aw + inner
-			case 5:
-				dataIdx = (ah-1-outer)*aw + (aw - 1 - inner)
-			case 2:
-				// Z80: reads columns right-to-left, each column top-to-bottom
-				// DE starts at data[aw-1], inner adds aw (stride), outer dec de
-				dataIdx = inner*aw + (aw - 1 - outer)
-			case 3:
-				// Z80 mode 3 (RIGHT wall): add_de_b forward stride, inc de
-				dataIdx = inner*aw + outer
-			case 6:
-				// Z80: reads columns right-to-left, each column bottom-to-top
-				// Starts at end, sbc_de_b backward stride, dec de between columns
-				dataIdx = (ah - 1 - inner)*aw + (aw - 1 - outer)
-			case 7:
-				// Z80 mode 7 (LEFT wall): hl_de_b_c to last row, sbc_de_b backward
-				dataIdx = (ah-1-inner)*aw + outer
+			case 0: // Normal
+				srcCol = inner
+				srcRow = outer
+			case 1: // H-flip
+				srcCol = aw - 1 - inner
+				srcRow = outer
+			case 4: // 180°
+				srcCol = inner
+				srcRow = ah - 1 - outer
+			case 5: // 180° + h-flip
+				srcCol = aw - 1 - inner
+				srcRow = ah - 1 - outer
+			case 2: // 90° CW rotation
+				srcCol = aw - 1 - outer
+				srcRow = inner
+			case 3: // 90° CCW rotation (RIGHT wall)
+				srcCol = outer
+				srcRow = inner
+			case 6: // 270° CW
+				srcCol = aw - 1 - outer
+				srcRow = ah - 1 - inner
+			case 7: // 270° CCW (LEFT wall)
+				srcCol = outer
+				srcRow = ah - 1 - inner
 			default:
-				dataIdx = outer*aw + inner
+				srcCol = inner
+				srcRow = outer
 			}
 
+			dataIdx := srcRow*aw + srcCol
 			if dataIdx < 0 || dataIdx >= len(attrValues) {
 				continue
 			}
@@ -1104,7 +1098,6 @@ func paintDecoAttrs(buf *screen.Buffer, startCol, startRow, aw, ah int,
 				av = roomAttr
 			}
 
-			// Screen: inner increments column, outer decrements row (upward)
 			cellCol := startCol + inner
 			cellRow := startRow - outer
 			if cellCol >= 0 && cellCol < 24 && cellRow >= 0 && cellRow < 24 {
