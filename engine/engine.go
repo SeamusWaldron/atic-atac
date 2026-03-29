@@ -1712,7 +1712,8 @@ func (g *GameEnv) drawHUD() {
 	for i := byte(0); i < g.lives && i < 3; i++ {
 		lx := 200 + int(i)*16
 		sprites := data.CharacterSprites(g.character)
-		g.buf.DrawSpriteXOR(lx, 139, sprites[data.DirDown][0])
+		// Z80 draw_lives at $A2CE: uses graphic $01/$11/$21 = LEFT-facing sprite
+		g.buf.DrawSpriteXOR(lx, 139, sprites[data.DirLeft][0])
 	}
 
 	// Inventory slots (rows 5-6, Y=40-55)
