@@ -27,7 +27,8 @@ const (
 	TypeFood       EntityType = 5
 	TypeKey        EntityType = 6
 	TypeCollectible EntityType = 7
-	TypeSpawning   EntityType = 8 // sparkle animation before becoming creature
+	TypeSpawning   EntityType = 8  // sparkle animation before becoming creature
+	TypeBoss       EntityType = 9  // boss creature (Mummy, Dracula, Devil, Frankenstein, Hunchback)
 )
 
 // CreatureKind identifies the creature subtype (graphic set).
@@ -53,6 +54,15 @@ var CreatureGraphics = [16]byte{
 	0x5C, 0x5E, 0x98, 0x98, 0x90, 0x90, 0x94, 0x94,
 	0x5C, 0x5E, 0x60, 0x62, 0x4C, 0x4E, 0x68, 0x6A,
 }
+
+// Boss kind identifiers (stored in Entity.Timer for TypeBoss)
+const (
+	BossMummy        = 0
+	BossDracula      = 1
+	BossDevil        = 2
+	BossFrankenstein = 3
+	BossHunchback    = 4
+)
 
 // MaxCreaturesPerRoom is the spawn cap.
 const MaxCreaturesPerRoom = 3

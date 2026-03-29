@@ -239,7 +239,9 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	// Creatures
 	g.spawnCreatures()
 	g.updateCreatures()
+	g.updateBosses()
 	g.checkCreaturePlayerCollision()
+	g.checkBossPlayerCollision()
 
 	// Food auto-consumption on contact (Z80 h_food at $8C63)
 	g.checkFoodPickup()
@@ -735,6 +737,127 @@ func (g *GameEnv) updateCreatures() {
 	})
 }
 
+// updateBosses updates boss creature AI each frame.
+func (g *GameEnv) updateBosses() {
+	px := int(g.playerX)
+	py := int(g.playerY)
+
+	g.entities.ForEachInRoom(g.room, func(e *entity.Entity) {
+		if e.Type != entity.TypeBoss {
+			return
+		}
+		e.Frame++ // animation counter
+
+		// All bosses: chase player in same room
+		speed := 1
+		if e.X < px {
+			e.X += speed
+		} else if e.X > px {
+			e.X -= speed
+		}
+		if e.Y < py {
+			e.Y += speed
+		} else if e.Y > py {
+			e.Y -= speed
+		}
+
+		// Boss-specific behaviour
+		switch e.Timer {
+		case entity.BossDracula:
+			// Runs away if player has crucifix
+			for _, slot := range g.inventory {
+				if slot.Occupied && slot.Name == "CRUCIX" {
+					// Invert — run away
+					if e.X < px {
+						e.X -= speed * 2
+					} else {
+						e.X += speed * 2
+					}
+					if e.Y < py {
+						e.Y -= speed * 2
+					} else {
+						e.Y += speed * 2
+					}
+					break
+				}
+			}
+			// Room hopping every 50 frames
+			if e.Frame%50 == 0 {
+				newRoom := g.nextRand()
+				if int(newRoom) < data.NumRooms && newRoom != g.room {
+					ra := data.RoomAttrs[newRoom]
+					if ra.Style < 3 { // only square rooms
+						e.Room = newRoom
+					}
+				}
+			}
+
+		case entity.BossFrankenstein:
+			// Defeated instantly if player has spanner
+			for _, slot := range g.inventory {
+				if slot.Occupied && slot.Name == "SPANNR" {
+					e.Active = false
+					g.score += 1000
+					g.hudDirty = true
+					return
+				}
+			}
+		}
+
+		// Wall bounds for bosses
+		ra := data.RoomAttrs[e.Room]
+		style := data.RoomStyles[ra.Style]
+		rw := int(style.Width) - 4
+		rh := int(style.Height) - 4
+		if !inWallBounds(e.X, roomCentreX, rw) {
+			if e.X < roomCentreX {
+				e.X = roomCentreX - rw + 1
+			} else {
+				e.X = roomCentreX + rw - 1
+			}
+		}
+		if !inWallBounds(e.Y, roomCentreY, rh) {
+			if e.Y < roomCentreY {
+				e.Y = roomCentreY - rh + 1
+			} else {
+				e.Y = roomCentreY + rh - 1
+			}
+		}
+	})
+}
+
+// checkBossPlayerCollision checks boss-player touch damage.
+func (g *GameEnv) checkBossPlayerCollision() {
+	const collisionDist = 12
+	px := int(g.playerX)
+	py := int(g.playerY)
+
+	g.entities.ForEachInRoom(g.room, func(e *entity.Entity) {
+		if e.Type != entity.TypeBoss {
+			return
+		}
+		if abs(px-e.X) >= collisionDist || abs(py-e.Y) >= collisionDist {
+			return
+		}
+		// Boss damage: Hunchback=16, others=8
+		damage := byte(8)
+		if e.Timer == entity.BossHunchback {
+			damage = 16
+		}
+		if g.frame&0x07 == 0 {
+			if g.energy > damage {
+				g.energy -= damage
+			} else {
+				g.energy = 0
+			}
+			g.hudDirty = true
+			if g.energy == 0 {
+				g.playerDeath()
+			}
+		}
+	})
+}
+
 func (g *GameEnv) checkCreaturePlayerCollision() {
 	const collisionDist = 12 // $0C from original
 
@@ -974,6 +1097,34 @@ func (g *GameEnv) spawnItems() {
 		e.Y = int(c[4])
 		e.Attr = c[5]
 		e.Graphic = c[0]
+	}
+
+	// --- Boss creatures (5 unique monsters) ---
+	bosses := []struct {
+		kind    byte
+		graphic byte
+		room    byte
+		x, y    byte
+		attr    byte
+	}{
+		{entity.BossMummy, 0x70, 0x17, 0x50, 0x50, 0x47},
+		{entity.BossDracula, 0x7C, 0x6D, 0x50, 0x50, 0x44},
+		{entity.BossDevil, 0x78, 0x43, 0x50, 0x50, 0x43},
+		{entity.BossFrankenstein, 0x74, 0x55, 0x50, 0x50, 0x42},
+		{entity.BossHunchback, 0x9C, 0x56, 0x58, 0x38, 0x42},
+	}
+	for _, b := range bosses {
+		e := g.entities.Spawn()
+		if e == nil {
+			break
+		}
+		e.Type = entity.TypeBoss
+		e.Room = b.room
+		e.X = int(b.x)
+		e.Y = int(b.y)
+		e.Attr = b.attr
+		e.Graphic = b.graphic
+		e.Timer = b.kind
 	}
 }
 
@@ -1448,11 +1599,26 @@ func (g *GameEnv) drawEntities() {
 
 		case entity.TypeKey, entity.TypeFood, entity.TypeCollectible:
 			// Draw item sprite using graphic ID from entity data.
-			// Z80 uses (graphicID-1) indexing into sprite_table.
 			graphicID := e.Graphic
 			if graphicID == 0 {
 				break
 			}
+			flatIdx := int(graphicID) - 1
+			group := flatIdx / 4
+			frame := flatIdx % 4
+			if group < len(data.GenSpriteTable) {
+				addr := data.GenSpriteTable[group][frame]
+				if spr := data.GenMenuIcons[addr]; spr != nil {
+					g.buf.DrawSpriteXOR(e.X, e.Y, spr)
+					g.paintEntityAttr(e.X, e.Y, 2, int(spr[0]), e.Attr)
+				}
+			}
+
+		case entity.TypeBoss:
+			// Boss sprites: 4-frame animation from graphic base
+			// Z80: base + (frame_counter & $03)
+			animFrame := byte(e.Frame>>2) & 0x03
+			graphicID := e.Graphic + animFrame
 			flatIdx := int(graphicID) - 1
 			group := flatIdx / 4
 			frame := flatIdx % 4
