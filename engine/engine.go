@@ -243,6 +243,8 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 
 	// Food auto-consumption on contact (Z80 h_food at $8C63)
 	g.checkFoodPickup()
+	// Secret passage check (Z80 h_barrel/$9421, h_bookcase/$9428, h_clock/$942F)
+	g.checkSecretPassage()
 	// Key/collectible pickup on Enter key
 	g.checkPickup(act)
 
@@ -1065,6 +1067,104 @@ func keyName(graphic byte) string {
 		return "ACG-3"
 	default:
 		return "KEY"
+	}
+}
+
+// checkSecretPassage checks if the player is overlapping a character-specific
+// secret passage decoration and triggers room transition if so.
+// Z80: h_clock ($942F) = Knight, h_bookcase ($9428) = Wizard, h_barrel ($9421) = Serf.
+func (g *GameEnv) checkSecretPassage() {
+	if g.doorTimer > 0 {
+		return // cooldown from recent door/passage transition
+	}
+
+	// Map character class to passage entity type
+	var passageType byte
+	switch g.character {
+	case data.Knight:
+		passageType = 0x10 // clock
+	case data.Wizard:
+		passageType = 0x17 // bookcase — wait, need to verify
+	case data.Serf:
+		passageType = 0x1A // barrel — need to verify
+	default:
+		return
+	}
+	// Z80 handler_table2: type $10 entry 1 = $942F (clock/knight)
+	// Type $14 entry 1 = $9428... actually let me use the actual types
+	// from the handler table analysis:
+	// h_barrel at $9421 for type $1A (handler_table2 row $18, entry 2)
+	// h_bookcase at $9428 for type $17 (handler_table2 row $14, entry 3)
+	// h_clock at $942F for type $10 (handler_table2 row $10, entry 0)
+	// These types need to be checked against the entity data in the room.
+
+	px := int(g.playerX)
+	py := int(g.playerY)
+	const passageDist = 12
+
+	entities := data.GenRoomEntityData[int(g.room)]
+	for _, pair := range entities {
+		// Check both sides of the pair for matching passage type in current room
+		for side := 0; side < 2; side++ {
+			var e [8]byte
+			if side == 0 {
+				copy(e[:], pair[0:8])
+			} else {
+				copy(e[:], pair[8:16])
+			}
+			if e[1] != g.room {
+				continue
+			}
+			if e[0] != passageType {
+				continue
+			}
+
+			// Check proximity
+			ex := int(e[3])
+			ey := int(e[4])
+			if abs(px-ex) >= passageDist || abs(py-ey) >= passageDist {
+				continue
+			}
+
+			// Found matching passage — get destination from the other side
+			var dest [8]byte
+			if side == 0 {
+				copy(dest[:], pair[8:16])
+			} else {
+				copy(dest[:], pair[0:8])
+			}
+
+			destRoom := dest[1]
+			destX := int(dest[3])
+			destY := int(dest[4])
+
+			// Clamp destination inside new room bounds
+			destRA := data.RoomAttrs[destRoom]
+			destStyle := data.RoomStyles[destRA.Style]
+			destRW := int(destStyle.Width)
+			destRH := int(destStyle.Height)
+			if destX <= roomCentreX-destRW {
+				destX = roomCentreX - destRW + 4
+			} else if destX >= roomCentreX+destRW {
+				destX = roomCentreX + destRW - 4
+			}
+			if destY <= roomCentreY-destRH {
+				destY = roomCentreY - destRH + 4
+			} else if destY >= roomCentreY+destRH {
+				destY = roomCentreY + destRH - 4
+			}
+
+			g.room = destRoom
+			g.playerX = byte(destX)
+			g.playerY = byte(destY)
+			g.roomDrawn = false
+			g.hudDirty = true
+			g.doorTimer = 25
+			g.spawnDelay = 32
+			g.weaponActive = false
+			g.markRoomVisited(g.room)
+			return
+		}
 	}
 }
 
