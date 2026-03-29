@@ -1062,14 +1062,16 @@ func paintDecoAttrs(buf *screen.Buffer, startCol, startRow, aw, ah int,
 			case 5:
 				dataIdx = (ah-1-outer)*aw + (aw - 1 - inner)
 			case 2:
-				// Z80: start at end row, stride backward, inc de between columns
-				dataIdx = (ah-1-inner)*aw + outer
+				// Z80: reads columns right-to-left, each column top-to-bottom
+				// DE starts at data[aw-1], inner adds aw (stride), outer dec de
+				dataIdx = inner*aw + (aw - 1 - outer)
 			case 3:
 				// Z80 mode 3 (RIGHT wall): add_de_b forward stride, inc de
 				dataIdx = inner*aw + outer
 			case 6:
-				// Z80: like mode 2 but from bottom
-				dataIdx = inner*aw + (aw - 1 - outer)
+				// Z80: reads columns right-to-left, each column bottom-to-top
+				// Starts at end, sbc_de_b backward stride, dec de between columns
+				dataIdx = (ah - 1 - inner)*aw + (aw - 1 - outer)
 			case 7:
 				// Z80 mode 7 (LEFT wall): hl_de_b_c to last row, sbc_de_b backward
 				dataIdx = (ah-1-inner)*aw + outer
