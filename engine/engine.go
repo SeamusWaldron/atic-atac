@@ -879,25 +879,18 @@ func (g *GameEnv) paintEntityAttr(x, y, widthCells, heightPx int, attr byte) {
 	if attr == 0 {
 		return
 	}
-	// Sprite draws upward: bottom at Y, top at Y-(heightPx-1)
+	// Paint attr on cells the sprite covers. This is the standard ZX Spectrum
+	// colour clash behaviour — all pixels in an 8x8 cell share the same colour.
 	topY := y - heightPx + 1
-	botY := y
-
 	startCol := x >> 3
 	topRow := topY >> 3
-	botRow := botY >> 3
-
-	// Compose entity ink colour with room paper colour so the background
-	// doesn't turn black around the entity. Keep entity's bright/ink bits,
-	// use room's paper bits.
-	roomAttr := data.RoomAttrs[g.room].Colour
-	composedAttr := (attr & 0x47) | (roomAttr & 0x38) // entity ink+bright, room paper
+	botRow := y >> 3
 
 	for r := topRow; r <= botRow; r++ {
 		for c := 0; c < widthCells; c++ {
 			cellCol := startCol + c
 			if cellCol >= 0 && cellCol < 24 && r >= 0 && r < 24 {
-				g.buf.Attrs[r*32+cellCol] = composedAttr
+				g.buf.Attrs[r*32+cellCol] = attr
 			}
 		}
 	}
