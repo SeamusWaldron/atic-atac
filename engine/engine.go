@@ -393,7 +393,14 @@ func (g *GameEnv) spawnCreatures() {
 	e.Type = entity.TypeCreature
 	e.Room = g.room
 	e.Graphic = entity.CreatureGraphics[kind]
-	e.Attr = 0x44 // bright green — default creature colour from Z80 template $8B6A
+	// Creature colours from Z80 handler routines
+	creatureColours := [16]byte{
+		0x46, 0x46, 0x42, 0x42, // Spider=yellow, Spikey=yellow, Bat=red, Bat=red
+		0x43, 0x43, 0x42, 0x42, // Witch=magenta, Witch=magenta, Monk=red, Monk=red
+		0x46, 0x46, 0x44, 0x46, // Spider=yellow, Spikey=yellow, Blob=green, Ghoul=yellow
+		0x46, 0x45, 0x47, 0x42, // Pumpkin=yellow, Ghostlet=cyan, Ghost=white, Batlet=red
+	}
+	e.Attr = creatureColours[kind]
 	e.X = roomCentreX - rw + int(g.nextRand())%(rw*2)
 	e.Y = roomCentreY - rh + int(g.nextRand())%(rh*2)
 	e.Timer = byte(kind)
