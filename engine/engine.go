@@ -881,23 +881,32 @@ func (g *GameEnv) drawPlayer() {
 // paintEntityAttr paints a single attribute colour over the cells an entity
 // sprite covers. Matches Z80 set_entity_attrs at $A00E.
 // Entity sprites draw UPWARD from Y, so attr cells go from Y upward.
-// widthCells is typically 2 (16px sprite), height is in pixel rows.
+// Z80 uses $5E10 (width_bytes = 2 or 3) based on sub-byte alignment.
 func (g *GameEnv) paintEntityAttr(x, y, widthCells, heightPx int, attr byte) {
 	if attr == 0 {
 		return
 	}
-	// Paint attr on cells the sprite covers. This is the standard ZX Spectrum
-	// colour clash behaviour — all pixels in an 8x8 cell share the same colour.
-	topY := y - heightPx + 1
-	startCol := x >> 3
-	topRow := topY >> 3
-	botRow := y >> 3
+	// Width: 2 cells if byte-aligned, 3 if sprite straddles a cell boundary
+	// (matching Z80 $5E10 which is set to 2 or 3 by sprite draw setup)
+	actualWidth := widthCells
+	if x&7 != 0 {
+		actualWidth = widthCells + 1
+	}
 
-	for r := topRow; r <= botRow; r++ {
-		for c := 0; c < widthCells; c++ {
+	// Height: Z80 formula from $A02E: height >> 2, inc, >> 1, & $1F, inc
+	// This gives a tighter cell count than ceil(height/8)
+	attrH := ((heightPx >> 2) + 1) >> 1
+	attrH = (attrH & 0x1F) + 1
+
+	startCol := x >> 3
+	startRow := y >> 3
+
+	for r := 0; r < attrH; r++ {
+		for c := 0; c < actualWidth; c++ {
 			cellCol := startCol + c
-			if cellCol >= 0 && cellCol < 24 && r >= 0 && r < 24 {
-				g.buf.Attrs[r*32+cellCol] = attr
+			cellRow := startRow - r
+			if cellCol >= 0 && cellCol < 24 && cellRow >= 0 && cellRow < 24 {
+				g.buf.Attrs[cellRow*32+cellCol] = attr
 			}
 		}
 	}
