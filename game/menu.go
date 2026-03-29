@@ -65,9 +65,12 @@ func DrawMenu(buf *screen.Buffer, ms *MenuState) {
 			}
 		}
 
-		// Set attribute for this text row
+		// Set attribute only for the text cells (starting at menuTextX),
+		// not the icon area to the left. Text starts at column 11 (88/8).
 		row := y >> 3
-		for c := 0; c < 32; c++ {
+		textStartCol := menuTextX >> 3 // = 11
+		textLen := len(menuStrings[i])
+		for c := textStartCol; c < textStartCol+textLen && c < 32; c++ {
 			if row >= 0 && row < 24 {
 				buf.Attrs[row*32+c] = attr
 			}
