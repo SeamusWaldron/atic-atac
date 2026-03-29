@@ -1010,6 +1010,97 @@ func (g *GameEnv) drawDecorations() {
 		// Door sprites use overwrite (NOP) to erase frame lines beneath.
 		useOverwrite := (e[5] & 0x03) == 0
 		drawDecoSprite(&g.buf, x, y, w, h, pixels, mode, useOverwrite)
+
+		// Attribute painting: h_room_item uses Y-1 for attrs (dec d at $9204).
+		// xy_to_attr maps pixel (X, Y-1) to character cell (X/8, (Y-1)/8).
+		// Attr data paints UPWARD from that cell (sbc hl, $0020 in Z80).
+		attrData, hasAttr := data.GenDecoAttrs[gfxIdx]
+		if hasAttr && len(attrData) >= 2 {
+			aw := int(attrData[0])
+			ah := int(attrData[1])
+			if aw > 0 && ah > 0 && len(attrData) >= 2+aw*ah {
+				attrY := int(e[4]) - 1 // dec d for attrs only
+				startCol := x >> 3
+				startRow := attrY >> 3
+				roomAttr := data.RoomAttrs[g.room].Colour
+
+				paintDecoAttrs(&g.buf, startCol, startRow, aw, ah,
+					attrData[2:], mode, roomAttr)
+			}
+		}
+	}
+}
+
+// paintDecoAttrs paints a decoration's per-cell attribute grid.
+// Starts at (startCol, startRow) and paints UPWARD (decreasing row).
+// Mode controls iteration order (0=normal, 4=reversed data, others=rotation).
+func paintDecoAttrs(buf *screen.Buffer, startCol, startRow, aw, ah int,
+	attrValues []byte, mode int, roomAttr byte) {
+
+	for r := 0; r < ah; r++ {
+		for c := 0; c < aw; c++ {
+			// Determine which attr data byte to read based on mode
+			var dataIdx int
+			switch mode {
+			case 0:
+				// Normal: sequential rows, painted upward
+				dataIdx = r*aw + c
+			case 1:
+				// H-flip: reverse columns within each row
+				dataIdx = r*aw + (aw - 1 - c)
+			case 4:
+				// 180°: reversed row order
+				dataIdx = (ah-1-r)*aw + c
+			case 5:
+				// 180° + h-flip: reversed rows AND columns
+				dataIdx = (ah-1-r)*aw + (aw - 1 - c)
+			case 2:
+				// 90° rotation: swap iteration (column-major)
+				dataIdx = c*ah + r
+				if dataIdx >= len(attrValues) {
+					continue
+				}
+			case 3:
+				// 90° CCW rotation
+				dataIdx = (aw-1-c)*ah + r
+				if dataIdx >= len(attrValues) {
+					continue
+				}
+			case 6:
+				// 270° CW
+				dataIdx = c*ah + (ah - 1 - r)
+				if dataIdx >= len(attrValues) {
+					continue
+				}
+			case 7:
+				// 270° CCW
+				dataIdx = (aw-1-c)*ah + (ah - 1 - r)
+				if dataIdx >= len(attrValues) {
+					continue
+				}
+			default:
+				dataIdx = r*aw + c
+			}
+
+			if dataIdx < 0 || dataIdx >= len(attrValues) {
+				continue
+			}
+
+			av := attrValues[dataIdx]
+			if av == 0x00 {
+				continue // skip transparent
+			}
+			if av == 0xFF {
+				av = roomAttr // use room colour
+			}
+
+			// Paint at (startCol + c, startRow - r) — upward
+			cellCol := startCol + c
+			cellRow := startRow - r
+			if cellCol >= 0 && cellCol < 24 && cellRow >= 0 && cellRow < 24 {
+				buf.Attrs[cellRow*32+cellCol] = av
+			}
+		}
 	}
 }
 
