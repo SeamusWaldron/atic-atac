@@ -13,59 +13,178 @@ type MenuState struct {
 	frame     int
 }
 
+// Menu text strings from Z80 $7CF8-$7D50
+var menuStrings = [7]string{
+	"1  KEYBOARD",
+	"2  KEMPSTON JOYSTICK",
+	"3  CURSOR   JOYSTICK",
+	"4  KNIGHT",
+	"5  WIZARD",
+	"6  SERF",
+	"0  START GAME",
+}
+
+// Menu Y positions from Z80 $7CF1-$7CF7
+var menuYPositions = [7]int{16, 40, 64, 88, 112, 136, 160}
+
+// Menu attr colours from Z80 $7CEA-$7CF0
+var menuAttrs = [7]byte{0xC5, 0x45, 0x45, 0xC5, 0x45, 0x45, 0x47}
+
+// Menu text X position from Z80 $7CCD
+const menuTextX = 88
+
 // DrawMenu renders the menu screen into the buffer.
 func DrawMenu(buf *screen.Buffer, ms *MenuState) {
 	buf.Clear()
 
-	// Black background with white text
-	buf.FillAttrArea(0, 0, 32, 24, 0x47) // bright white on black
+	// Black background
+	buf.FillAttrArea(0, 0, 32, 24, 0x00)
 
-	// Title
-	buf.DrawString(24, 8, "ATICATAC GAME SELECTION")
+	// Header: "ATICATAC GAME SELECTION" at (0, 0) in bright white
+	// Z80: attr=$47, coords $0020 → X=32, Y=0... but looking at original
+	// the header is at the top. Z80 coords: H=Y=$00, L=X=$20 → X=32, Y=0
+	headerAttr := byte(0x47) // bright white
+	buf.FillAttrArea(0, 0, 32, 1, headerAttr)
+	buf.DrawStringFrom(32, 0, "ATICATAC GAME SELECTION", &data.GenCharset)
 
-	// Menu options — Y positions from Z80: $10,$28,$40,$58,$70,$88,$A0
-	options := []struct {
-		y    int
-		text string
-		attr byte
-	}{
-		{16, "1  KEYBOARD", 0x45},     // cyan
-		{40, "2  KEMPSTON JOYSTICK", 0x45},
-		{64, "3  CURSOR   JOYSTICK", 0x45},
-		{88, "4  KNIGHT", 0x45},
-		{112, "5  WIZARD", 0x45},
-		{136, "6  SERF", 0x45},
-		{160, "0  START GAME", 0x47}, // white
-	}
+	// Menu options
+	for i := 0; i < 7; i++ {
+		y := menuYPositions[i]
+		attr := menuAttrs[i]
 
-	for i, opt := range options {
-		// Set attribute row colour
-		row := opt.y >> 3
-		buf.FillAttrArea(0, row, 32, 1, opt.attr)
-
-		// Flash the selected character option
-		if i == 3+ms.character {
-			// Flash effect: alternate between normal and inverse
+		// Flash the selected character option (4=Knight, 5=Wizard, 6=Serf)
+		if i >= 3 && i <= 5 && i-3 == ms.character {
 			if (ms.frame/16)%2 == 0 {
-				buf.FillAttrArea(0, row, 32, 1, opt.attr|0x80) // FLASH bit
+				attr |= 0x80 // set FLASH bit
+			}
+		}
+		// Flash the selected input option (just flash option 1=keyboard by default)
+		if i == 0 {
+			if (ms.frame/16)%2 == 0 {
+				attr |= 0x80
 			}
 		}
 
-		buf.DrawString(64, opt.y, opt.text)
+		// Set attribute for this text row
+		row := y >> 3
+		for c := 0; c < 32; c++ {
+			if row >= 0 && row < 24 {
+				buf.Attrs[row*32+c] = attr
+			}
+		}
+
+		buf.DrawStringFrom(menuTextX, y, menuStrings[i], &data.GenCharset)
 	}
 
-	// Draw character preview sprites next to options 4-6
-	charClasses := [3]data.CharacterClass{data.Knight, data.Wizard, data.Serf}
-	for i, cls := range charClasses {
-		sprites := data.CharacterSprites(cls)
-		sprData := sprites[data.DirDown][0]
-		y := 88 + i*24
-		buf.DrawSpriteXOR(32, y+int(sprData[0]), sprData) // draw at left of text
+	// Menu icons from Z80 $A331-$A379
+	// Keyboard icon (2 parts): graphic $48/$49 at (32,28)/(48,28), attr $43 (magenta)
+	drawMenuIcon(buf, 0x48, 32, 28, 0x43)
+	drawMenuIcon(buf, 0x49, 48, 28, 0x43)
+
+	// Joystick icon (2 parts): graphic $4A/$4B at (32,55)/(48,55), attr $44 (green)
+	drawMenuIcon(buf, 0x4A, 32, 55, 0x44)
+	drawMenuIcon(buf, 0x4B, 48, 55, 0x44)
+
+	// Cursor icon (2 parts): graphic $32/$33 at (32,79)/(48,79), attr $46 (yellow)
+	drawMenuIcon(buf, 0x32, 32, 79, 0x46)
+	drawMenuIcon(buf, 0x33, 48, 79, 0x46)
+
+	// Character sprites: Knight, Wizard, Serf
+	charGraphics := [3]byte{0x01, 0x11, 0x21}
+	charYPositions := [3]int{103, 127, 151}
+	for i, gfx := range charGraphics {
+		// Look up sprite from sprite table
+		group := int(gfx) / 4
+		frame := int(gfx) % 4
+		if group < len(data.GenSpriteTable) {
+			sprAddr := data.GenSpriteTable[group][frame]
+			if sprAddr != 0 {
+				// Read sprite from memory via extraction
+				sprData := getSpriteByAddr(sprAddr)
+				if sprData != nil {
+					buf.DrawSpriteXOR(40, charYPositions[i], sprData)
+					// Paint attr for character sprite
+					h := int(sprData[0])
+					paintMenuAttr(buf, 40, charYPositions[i], h, 0x47)
+				}
+			}
+		}
+		_ = i
 	}
 
-	// Copyright
+	// Copyright at bottom: Z80 coords $B800 → X=0, Y=184
 	buf.FillAttrArea(0, 23, 32, 1, 0x47)
-	buf.DrawString(16, 184, "1983 A.C.G. ALL RIGHTS RESERVED")
+	buf.DrawStringFrom(0, 184, "\x251983 A.C.G. ALL RIGHTS RESERVED", &data.GenCharset)
+}
+
+// drawMenuIcon draws a menu icon sprite by graphic ID.
+func drawMenuIcon(buf *screen.Buffer, graphicID byte, x, y int, attr byte) {
+	group := int(graphicID) / 4
+	frame := int(graphicID) % 4
+	if group >= len(data.GenSpriteTable) {
+		return
+	}
+	sprAddr := data.GenSpriteTable[group][frame]
+	if sprAddr == 0 {
+		return
+	}
+	sprData := getSpriteByAddr(sprAddr)
+	if sprData == nil {
+		return
+	}
+	buf.DrawSpriteXOR(x, y, sprData)
+	h := int(sprData[0])
+	paintMenuAttr(buf, x, y, h, attr)
+}
+
+// paintMenuAttr paints attr for a menu sprite.
+func paintMenuAttr(buf *screen.Buffer, x, y, heightPx int, attr byte) {
+	startCol := x >> 3
+	startRow := y >> 3
+	topRow := (y - heightPx + 1) >> 3
+	w := 2
+	if x&7 != 0 {
+		w = 3
+	}
+	for r := topRow; r <= startRow; r++ {
+		for c := 0; c < w; c++ {
+			cc := startCol + c
+			if cc >= 0 && cc < 32 && r >= 0 && r < 24 {
+				buf.Attrs[r*32+cc] = attr
+			}
+		}
+	}
+}
+
+// getSpriteByAddr returns sprite data for a given address from GenDecoSprites
+// or from the player sprite arrays. Returns nil if not found.
+func getSpriteByAddr(addr uint16) []byte {
+	// Check player sprites (Knight group 0-3, Wizard 4-7, Serf 8-11)
+	allSprites := [...]*[4][3][]byte{
+		&data.KnightSprites,
+		&data.WizardSprites,
+		&data.SerfSprites,
+	}
+
+	// Search through sprite table for matching address
+	for group := 0; group < len(data.GenSpriteTable); group++ {
+		for frame := 0; frame < 4; frame++ {
+			if data.GenSpriteTable[group][frame] == addr {
+				// Found the group/frame. Try to get sprite data.
+				charIdx := group / 4 // 0=Knight, 1=Wizard, 2=Serf
+				dirIdx := group % 4
+				frameIdx := frame
+				if frameIdx > 2 {
+					frameIdx = 1 // frame pattern 0,1,2,1
+				}
+				if charIdx < len(allSprites) && dirIdx < 4 && frameIdx < 3 {
+					spr := allSprites[charIdx]
+					return spr[dirIdx][frameIdx]
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // UpdateMenu handles menu input. Returns true if game should start.

@@ -45,6 +45,7 @@ func main() {
 	genDecorationSprites()
 	genDoorData()
 	genPlayerSprites()
+	genCharset()
 	genCreatureSprites()
 	genItemData()
 	genRoomEntities()
@@ -587,6 +588,39 @@ func genItemData() {
 		b := getBytes(addr, 8)
 		fmt.Fprintf(f, "\t{0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X},\n",
 			b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7])
+	}
+	fmt.Fprintln(f, "}")
+}
+
+func genCharset() {
+	f := createFile("data/gen_charset.go")
+	defer f.Close()
+
+	fmt.Fprintln(f, "package data")
+	fmt.Fprintln(f, "")
+	fmt.Fprintln(f, "// Auto-generated from aticatac.skool — do not edit.")
+	fmt.Fprintln(f, "")
+
+	// Custom charset at $BF4C: 96 characters (space to _), 8 bytes each
+	// The charset_addr at $5E01 points to $BE4C which is 256 bytes before
+	// the actual charset at $BF4C. The print routine at $A1D3 adds the
+	// character code × 8 to $BE4C, so char 32 (space) = $BE4C + 32*8 = $BF4C.
+	fmt.Fprintln(f, "// GenCharset: custom game font from $BF4C (96 chars × 8 bytes).")
+	fmt.Fprintln(f, "// Characters 32-127 (space to DEL). Indexed by (ch - 32) * 8.")
+	fmt.Fprintln(f, "var GenCharset = [96][8]byte{")
+	base := uint16(0xBF4C)
+	for i := 0; i < 96; i++ {
+		addr := base + uint16(i*8)
+		b := getBytes(addr, 8)
+		ch := i + 32
+		label := ""
+		if ch >= 33 && ch <= 126 {
+			label = fmt.Sprintf(" // %c", rune(ch))
+		} else if ch == 32 {
+			label = " // space"
+		}
+		fmt.Fprintf(f, "\t{0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X},%s\n",
+			b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], label)
 	}
 	fmt.Fprintln(f, "}")
 }

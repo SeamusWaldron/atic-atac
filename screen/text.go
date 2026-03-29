@@ -190,3 +190,16 @@ func (b *Buffer) DrawString(x, y int, s string) {
 		b.DrawChar(x+i*8, y, s[i])
 	}
 }
+
+// DrawStringFrom draws a string using a custom charset (96 chars, 8 bytes each).
+// charset[0] = space (char 32). Each character is 8 pixels wide.
+func (b *Buffer) DrawStringFrom(x, y int, s string, charset *[96][8]byte) {
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if ch < 32 || ch > 127 {
+			continue
+		}
+		idx := int(ch - 32)
+		b.DrawCharFrom(x+i*8, y, charset[idx][:])
+	}
+}
