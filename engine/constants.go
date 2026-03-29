@@ -20,4 +20,5 @@ const (
 	StateWin      GameState = 4
 	StateDying    GameState = 5 // death shrink animation
 	StateSpawning GameState = 6 // materialise animation
+	StateFalling  GameState = 7 // trap door falling tunnel effect
 )

@@ -58,6 +58,10 @@ type GameEnv struct {
 	playerAnimH   int // current visible height during animation
 	playerAnimClr byte // colour cycle during spawn animation
 	deathX, deathY byte // position where player died (for tombstone)
+	fallTimer      int  // trap door falling animation countdown (128 frames)
+	fallDestRoom   byte // destination room after falling
+	fallDestX      byte
+	fallDestY      byte
 
 	// Entities
 	entities   *entity.Pool
@@ -195,6 +199,8 @@ func (g *GameEnv) Step(act action.Action) StepResult {
 		g.stepSpawning()
 	case StateDead:
 		g.stepDead()
+	case StateFalling:
+		g.stepFalling()
 	}
 
 	return StepResult{
@@ -415,6 +421,65 @@ func (g *GameEnv) stepSpawning() {
 
 	g.clearHUDArea()
 	g.drawHUD()
+}
+
+// stepFalling handles the trap door falling tunnel animation.
+// Z80: 128 frames of tunnel effect with flashing black/white every 8 frames.
+// Uses room style 12 (trapdoor tunnel) concentric square graphics.
+func (g *GameEnv) stepFalling() {
+	g.frame++
+	g.fallTimer--
+
+	// Clear and draw tunnel effect
+	for i := range g.buf.Pixels {
+		g.buf.Pixels[i] = 0
+	}
+
+	// Draw tunnel concentric squares using room style 12
+	style := data.RoomStyles[12]
+	for _, lg := range style.Lines {
+		if len(lg.Dsts) == 0 {
+			continue
+		}
+		srcIdx := int(lg.Src)
+		if srcIdx >= len(style.Points) {
+			continue
+		}
+		src := style.Points[srcIdx]
+		for _, di := range lg.Dsts {
+			dstIdx := int(di)
+			if dstIdx >= len(style.Points) {
+				continue
+			}
+			dst := style.Points[dstIdx]
+			g.buf.DrawLine(int(src.X), int(src.Y), int(dst.X), int(dst.Y))
+		}
+	}
+
+	// Flash attributes: bright white every 8 frames, black otherwise
+	// Z80: (frame_counter & $07) == 0 → white, else black
+	attr := byte(0x00) // black
+	if g.fallTimer&0x07 == 0 {
+		attr = 0x47 // bright white
+	}
+	g.buf.FillAttrArea(0, 0, 24, 24, attr)
+
+	// Keep HUD visible
+	g.clearHUDArea()
+	g.drawHUD()
+
+	// When animation complete, transition to destination room
+	if g.fallTimer <= 0 {
+		g.room = g.fallDestRoom
+		g.playerX = g.fallDestX
+		g.playerY = g.fallDestY
+		g.roomDrawn = false
+		g.hudDirty = true
+		g.doorTimer = 25
+		g.spawnDelay = 32
+		g.markRoomVisited(g.room)
+		g.state = StatePlaying
+	}
 }
 
 // nextRand returns a pseudo-random byte.
@@ -1466,15 +1531,13 @@ func (g *GameEnv) checkTrapDoor() {
 				destY = roomCentreY + destRH - 4
 			}
 
-			g.room = destRoom
-			g.playerX = byte(destX)
-			g.playerY = byte(destY)
-			g.roomDrawn = false
-			g.hudDirty = true
-			g.doorTimer = 25
-			g.spawnDelay = 32
+			// Start falling tunnel animation (Z80: 128 frames at $9731)
+			g.state = StateFalling
+			g.fallTimer = 128
+			g.fallDestRoom = destRoom
+			g.fallDestX = byte(destX)
+			g.fallDestY = byte(destY)
 			g.weaponActive = false
-			g.markRoomVisited(g.room)
 			return
 		}
 	}
