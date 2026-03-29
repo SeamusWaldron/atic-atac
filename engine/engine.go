@@ -1180,7 +1180,13 @@ func (g *GameEnv) checkPickup(act action.Action) {
 		case entity.TypeKey:
 			slot := g.findFreeSlot()
 			if slot < 0 {
-				return // inventory full
+				// Inventory full — drop last item at player position
+				// Z80 drop_item at $9358: drops slot 3, shifts others
+				g.dropItem()
+				slot = g.findFreeSlot()
+				if slot < 0 {
+					return // shouldn't happen after drop
+				}
 			}
 			g.inventory[slot] = InvSlot{
 				Occupied: true,
@@ -1191,6 +1197,50 @@ func (g *GameEnv) checkPickup(act action.Action) {
 		}
 		g.hudDirty = true
 	})
+}
+
+// dropItem drops the last inventory item at the player's position.
+// Z80 drop_item at $9358: places item at player room/position.
+func (g *GameEnv) dropItem() {
+	// Find the last occupied slot
+	dropSlot := -1
+	for i := len(g.inventory) - 1; i >= 0; i-- {
+		if g.inventory[i].Occupied {
+			dropSlot = i
+			break
+		}
+	}
+	if dropSlot < 0 {
+		return
+	}
+
+	// Create a floor entity for the dropped item
+	dropped := g.inventory[dropSlot]
+	g.inventory[dropSlot] = InvSlot{}
+
+	e := g.entities.Spawn()
+	if e != nil {
+		e.Type = entity.TypeKey
+		e.Room = g.room
+		e.X = int(g.playerX)
+		e.Y = int(g.playerY)
+		e.Graphic = dropped.ItemType
+		// Set attr based on key name
+		switch dropped.Name {
+		case "RED":
+			e.Attr = 0x42
+		case "GREEN":
+			e.Attr = 0x44
+		case "CYAN":
+			e.Attr = 0x45
+		case "YELLOW":
+			e.Attr = 0x46
+		case "ACG-1", "ACG-2", "ACG-3":
+			e.Attr = 0x46
+		default:
+			e.Attr = 0x47
+		}
+	}
 }
 
 func (g *GameEnv) findFreeSlot() int {
