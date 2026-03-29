@@ -1077,9 +1077,9 @@ func paintDecoAttrs(buf *screen.Buffer, startCol, startRow, aw, ah int,
 			case 6: // 270° CW
 				srcCol = aw - 1 - outer
 				srcRow = ah - 1 - inner
-			case 7: // 270° CCW (LEFT wall)
+			case 7: // LEFT wall: same pixel mapping as mode 3
 				srcCol = outer
-				srcRow = ah - 1 - inner
+				srcRow = inner
 			default:
 				srcCol = inner
 				srcRow = outer
