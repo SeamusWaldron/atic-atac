@@ -1034,44 +1034,47 @@ func (g *GameEnv) drawDecorations() {
 // paintDecoAttrs paints a decoration's per-cell attribute grid.
 // Starts at (startCol, startRow) and paints UPWARD (decreasing row).
 // Mode controls iteration order (0=normal, 4=reversed data, others=rotation).
+//
+// For non-rotation modes (0,1,4,5): outer=ah rows, inner=aw columns.
+// For rotation modes (2,3,6,7): outer=aw rows, inner=ah columns.
+// Screen mapping: inner increments column, outer decrements row (upward).
 func paintDecoAttrs(buf *screen.Buffer, startCol, startRow, aw, ah int,
 	attrValues []byte, mode int, roomAttr byte) {
 
-	for r := 0; r < ah; r++ {
-		for c := 0; c < aw; c++ {
-			// Determine which attr data byte to read based on mode
+	// Rotation modes swap the loop dimensions
+	outerCount := ah
+	innerCount := aw
+	if mode == 2 || mode == 3 || mode == 6 || mode == 7 {
+		outerCount = aw
+		innerCount = ah
+	}
+
+	for outer := 0; outer < outerCount; outer++ {
+		for inner := 0; inner < innerCount; inner++ {
 			var dataIdx int
 			switch mode {
 			case 0:
-				// Normal: sequential rows, painted upward
-				dataIdx = r*aw + c
+				dataIdx = outer*aw + inner
 			case 1:
-				// H-flip: reverse columns within each row
-				dataIdx = r*aw + (aw - 1 - c)
+				dataIdx = outer*aw + (aw - 1 - inner)
 			case 4:
-				// 180°: reversed row order
-				dataIdx = (ah-1-r)*aw + c
+				dataIdx = (ah-1-outer)*aw + inner
 			case 5:
-				// 180° + h-flip: reversed rows AND columns
-				dataIdx = (ah-1-r)*aw + (aw - 1 - c)
+				dataIdx = (ah-1-outer)*aw + (aw - 1 - inner)
 			case 2:
-				// 90° CW: start at end, stride backward through rows
-				dataIdx = (ah-1-r)*aw + c
+				// Z80: start at end row, stride backward, inc de between columns
+				dataIdx = (ah-1-inner)*aw + outer
 			case 3:
-				// Mode 3 (RIGHT wall): inner=height with stride aw, outer=width
-				// Z80: add_de_b (stride forward by B=width), inc de between columns
-				// Reads data[c * aw + r] — column-major, forward
-				dataIdx = c*aw + r
+				// Z80 mode 3 (RIGHT wall): add_de_b forward stride, inc de
+				dataIdx = inner*aw + outer
 			case 6:
-				// 270° CW: reversed column order
-				dataIdx = r*aw + (aw - 1 - c)
+				// Z80: like mode 2 but from bottom
+				dataIdx = inner*aw + (aw - 1 - outer)
 			case 7:
-				// Mode 7 (LEFT wall): hl_de_b_c starts at last row, sbc_de_b backward
-				// Z80: starts at data[(ah-1)*aw], strides backward by aw
-				// Reads data[(ah-1-c) * aw + r] — column-major from end
-				dataIdx = (ah-1-c)*aw + r
+				// Z80 mode 7 (LEFT wall): hl_de_b_c to last row, sbc_de_b backward
+				dataIdx = (ah-1-inner)*aw + outer
 			default:
-				dataIdx = r*aw + c
+				dataIdx = outer*aw + inner
 			}
 
 			if dataIdx < 0 || dataIdx >= len(attrValues) {
@@ -1083,12 +1086,12 @@ func paintDecoAttrs(buf *screen.Buffer, startCol, startRow, aw, ah int,
 				continue // skip transparent
 			}
 			if av == 0xFF {
-				av = roomAttr // use room colour
+				av = roomAttr
 			}
 
-			// Paint at (startCol + c, startRow - r) — upward
-			cellCol := startCol + c
-			cellRow := startRow - r
+			// Screen: inner increments column, outer decrements row (upward)
+			cellCol := startCol + inner
+			cellRow := startRow - outer
 			if cellCol >= 0 && cellCol < 24 && cellRow >= 0 && cellRow < 24 {
 				buf.Attrs[cellRow*32+cellCol] = av
 			}
