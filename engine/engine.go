@@ -271,8 +271,8 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 		g.doorTimer--
 	}
 
-	// Door open/close cycling (Z80 $5E2E timer, 94 frames)
-	g.cycleDoors()
+	// Door cycling disabled until properly implemented
+	// g.cycleDoors()
 
 	// Render
 	g.clearPlayArea()
@@ -1841,11 +1841,10 @@ func (g *GameEnv) drawDecorations() {
 			continue
 		}
 
-		// For normal doors: swap to closed sprite if door is closed
-		// Open door = gfxIdx 1 (door_frame), Closed door = gfxIdx 31 (door_shut)
-		if (typeID == 0x01 || typeID == 0x02) && !g.isDoorOpen(g.room, ei) {
-			gfxIdx = 31 - 1 // door_shut sprite (type $20, gfxIdx=31)
-		}
+		// Door state rendering disabled — the cycling/state system needs
+		// proper implementation matching Z80 before it can swap sprites.
+		// For now all doors render as open (horseshoe arch).
+		_ = ei
 
 		// Skip chicken sprites (gfx types 18/19 = HUD energy bar, not room decor)
 		if gfxIdx == 18 || gfxIdx == 19 {
