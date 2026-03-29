@@ -393,7 +393,7 @@ func (g *GameEnv) spawnCreatures() {
 	e.Type = entity.TypeCreature
 	e.Room = g.room
 	e.Graphic = entity.CreatureGraphics[kind]
-	e.Attr = 0x44 + byte(kind&0x07) // vary colour
+	e.Attr = 0x44 // bright green — default creature colour from Z80 template $8B6A
 	e.X = roomCentreX - rw + int(g.nextRand())%(rw*2)
 	e.Y = roomCentreY - rh + int(g.nextRand())%(rh*2)
 	e.Timer = byte(kind)
@@ -864,9 +864,11 @@ func (g *GameEnv) drawPlayer() {
 	sprData := sprites[g.playerDir][frame]
 	g.buf.DrawSpriteXOR(int(g.playerX), int(g.playerY), sprData)
 
-	// Paint player attribute colour (bright white $47)
+	// Paint player attribute colour — bright white
 	sprH := int(sprData[0])
 	g.paintEntityAttr(int(g.playerX), int(g.playerY), 2, sprH, 0x47)
+	// Also need to restore room colour around the player's previous position
+	// but for now just paint the sprite's cells
 }
 
 // paintEntityAttr paints a single attribute colour over the cells an entity
@@ -877,21 +879,19 @@ func (g *GameEnv) paintEntityAttr(x, y, widthCells, heightPx int, attr byte) {
 	if attr == 0 {
 		return
 	}
-	startCol := x >> 3
-	startRow := y >> 3
-	// Height in attr cells: sprite draws upward from Y, covering
-	// Y-(heightPx-1) to Y. Number of 8px cells = heightPx/4 >> 1 + 1
-	// matching Z80: height >> 2, inc, >> 1, and $1F, inc
-	attrH := (heightPx >> 2) + 1
-	attrH = (attrH >> 1) & 0x1F
-	attrH++
+	// Sprite draws upward: bottom at Y, top at Y-(heightPx-1)
+	topY := y - heightPx + 1
+	botY := y
 
-	for r := 0; r < attrH; r++ {
+	startCol := x >> 3
+	topRow := topY >> 3
+	botRow := botY >> 3
+
+	for r := topRow; r <= botRow; r++ {
 		for c := 0; c < widthCells; c++ {
 			cellCol := startCol + c
-			cellRow := startRow - r
-			if cellCol >= 0 && cellCol < 24 && cellRow >= 0 && cellRow < 24 {
-				g.buf.Attrs[cellRow*32+cellCol] = attr
+			if cellCol >= 0 && cellCol < 24 && r >= 0 && r < 24 {
+				g.buf.Attrs[r*32+cellCol] = attr
 			}
 		}
 	}
