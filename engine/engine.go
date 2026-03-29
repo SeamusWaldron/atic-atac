@@ -1035,7 +1035,7 @@ func drawWide(buf *screen.Buffer, x, y, w, h int, pixels []byte, overwrite bool)
 	if overwrite {
 		buf.DrawSpriteWideOverwrite(x, y, w, h, pixels)
 	} else {
-		drawWide(buf, x, y, w, h, pixels, overwrite)
+		buf.DrawSpriteWideOR(x, y, w, h, pixels)
 	}
 }
 
