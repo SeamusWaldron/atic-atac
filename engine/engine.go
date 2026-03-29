@@ -571,39 +571,39 @@ func (g *GameEnv) randomiseDoorStates() {
 	g.doorTypes = make(map[uint32]byte)
 	g.doorCycleTimer = 94
 
+	// Z80 randomise_doors at $94F5: for each door pair, read a random byte.
+	// If value >= $70 (~56%): door stays OPEN (default state).
+	// If value < $70 (~44%): door becomes CLOSED.
+	// Both sides of the pair get the SAME state.
 	for room, entities := range data.GenRoomEntityData {
 		for i, pair := range entities {
-			// Check both sides of the pair
-			for side := 0; side < 2; side++ {
-				var e [8]byte
-				if side == 0 {
-					copy(e[:], pair[0:8])
-				} else {
-					copy(e[:], pair[8:16])
-				}
-				if e[1] != byte(room) {
-					continue
-				}
-				typeID := e[0]
-				// Only convert initial door types ($01=cave, $02=normal)
-				// to runtime handler types ($20-$23)
-				if typeID == 0x01 {
-					// Cave doorway: ~56% become closed ($22), rest open ($23)
-					key := uint32(room)<<16 | uint32(i)
-					if g.nextRand() > 0x70 {
-						g.doorTypes[key] = 0x22 // closed cave
-					} else {
-						g.doorTypes[key] = 0x23 // open cave
-					}
-				} else if typeID == 0x02 {
-					// Normal doorway: ~56% become closed ($20), rest open ($21)
-					key := uint32(room)<<16 | uint32(i)
-					if g.nextRand() > 0x70 {
-						g.doorTypes[key] = 0x20 // closed normal
-					} else {
-						g.doorTypes[key] = 0x21 // open normal
-					}
-				}
+			// Use side A's type to determine if this is a door
+			typeA := pair[0]
+			typeB := pair[8]
+
+			// Only process door pairs (types $01=cave, $02=normal)
+			isDoor := false
+			var closedType, openType byte
+			if typeA == 0x01 || typeB == 0x01 {
+				isDoor = true
+				closedType = 0x22 // closed cave
+				openType = 0x23   // open cave
+			} else if typeA == 0x02 || typeB == 0x02 {
+				isDoor = true
+				closedType = 0x20 // closed normal
+				openType = 0x21   // open normal
+			}
+
+			if !isDoor {
+				continue
+			}
+
+			// One random check per pair — same state for both sides
+			key := uint32(room)<<16 | uint32(i)
+			if g.nextRand() >= 0x70 {
+				g.doorTypes[key] = openType // ~56% stay open
+			} else {
+				g.doorTypes[key] = closedType // ~44% become closed
 			}
 		}
 	}
