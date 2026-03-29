@@ -27,6 +27,7 @@ const (
 	TypeFood       EntityType = 5
 	TypeKey        EntityType = 6
 	TypeCollectible EntityType = 7
+	TypeSpawning   EntityType = 8 // sparkle animation before becoming creature
 )
 
 // CreatureKind identifies the creature subtype (graphic set).

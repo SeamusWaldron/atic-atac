@@ -390,7 +390,8 @@ func (g *GameEnv) spawnCreatures() {
 	}
 
 	kind := int(g.nextRand() & 0x0F)
-	e.Type = entity.TypeCreature
+	// Spawn as sparkle first (Z80 h_sparkles at $85F7)
+	e.Type = entity.TypeSpawning
 	e.Room = g.room
 	e.Graphic = entity.CreatureGraphics[kind]
 	// Creature colours from Z80 handler routines
@@ -404,6 +405,7 @@ func (g *GameEnv) spawnCreatures() {
 	e.X = roomCentreX - rw + int(g.nextRand())%(rw*2)
 	e.Y = roomCentreY - rh + int(g.nextRand())%(rh*2)
 	e.Timer = byte(kind)
+	e.Frame = 16 // sparkle for 16 frames before becoming creature
 
 	// Random initial velocity
 	g.setRandomVelocity(e)
@@ -933,6 +935,29 @@ func (g *GameEnv) drawEntities() {
 			e.Frame++
 			if e.Timer == 0 {
 				e.Active = false
+			}
+
+		case entity.TypeSpawning:
+			// Sparkle animation: graphics $58-$5B, 4 frames
+			// Z80: ix+$0E counts down, and $03 selects frame, add $58
+			sparkleFrame := e.Frame & 0x03
+			sparkleGfx := byte(0x58) + sparkleFrame
+			// Look up sparkle sprite via (graphicID-1) indexing
+			flatIdx := int(sparkleGfx) - 1
+			group := flatIdx / 4
+			frame := flatIdx % 4
+			if group < len(data.GenSpriteTable) {
+				addr := data.GenSpriteTable[group][frame]
+				if spr := data.GenMenuIcons[addr]; spr != nil {
+					g.buf.DrawSpriteXOR(e.X, e.Y, spr)
+					g.paintEntityAttr(e.X, e.Y, 2, int(spr[0]), e.Attr)
+				}
+			}
+			e.Frame--
+			if e.Frame == 0 {
+				// Convert to actual creature
+				e.Type = entity.TypeCreature
+				e.Frame = 0
 			}
 
 		case entity.TypeKey, entity.TypeFood, entity.TypeCollectible:
