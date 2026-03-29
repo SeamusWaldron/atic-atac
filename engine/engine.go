@@ -1077,8 +1077,8 @@ func paintDecoAttrs(buf *screen.Buffer, startCol, startRow, aw, ah int,
 			case 6: // 270° CW
 				srcCol = aw - 1 - outer
 				srcRow = ah - 1 - inner
-			case 7: // 270° CCW (LEFT wall)
-				srcCol = outer
+			case 7: // LEFT wall: flip column axis compared to mode 3
+				srcCol = aw - 1 - outer
 				srcRow = ah - 1 - inner
 			default:
 				srcCol = inner
