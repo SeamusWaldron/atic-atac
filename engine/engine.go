@@ -247,6 +247,8 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	g.checkFoodPickup()
 	// Secret passage check (Z80 h_barrel/$9421, h_bookcase/$9428, h_clock/$942F)
 	g.checkSecretPassage()
+	// Trap door check (Z80 h_trap_closed/$91BC, h_trap_open/$91C5)
+	g.checkTrapDoor()
 	// Key/collectible pickup on Enter key
 	g.checkPickup(act)
 
@@ -1290,6 +1292,82 @@ func (g *GameEnv) checkSecretPassage() {
 			destY := int(dest[4])
 
 			// Clamp destination inside new room bounds
+			destRA := data.RoomAttrs[destRoom]
+			destStyle := data.RoomStyles[destRA.Style]
+			destRW := int(destStyle.Width)
+			destRH := int(destStyle.Height)
+			if destX <= roomCentreX-destRW {
+				destX = roomCentreX - destRW + 4
+			} else if destX >= roomCentreX+destRW {
+				destX = roomCentreX + destRW - 4
+			}
+			if destY <= roomCentreY-destRH {
+				destY = roomCentreY - destRH + 4
+			} else if destY >= roomCentreY+destRH {
+				destY = roomCentreY + destRH - 4
+			}
+
+			g.room = destRoom
+			g.playerX = byte(destX)
+			g.playerY = byte(destY)
+			g.roomDrawn = false
+			g.hudDirty = true
+			g.doorTimer = 25
+			g.spawnDelay = 32
+			g.weaponActive = false
+			g.markRoomVisited(g.room)
+			return
+		}
+	}
+}
+
+// checkTrapDoor checks if the player is standing on an open trap door.
+// Z80 h_trap_open at $91C5: player falls to linked room.
+func (g *GameEnv) checkTrapDoor() {
+	if g.doorTimer > 0 {
+		return
+	}
+
+	px := int(g.playerX)
+	py := int(g.playerY)
+	const trapDist = 12
+
+	entities := data.GenRoomEntityData[int(g.room)]
+	for _, pair := range entities {
+		for side := 0; side < 2; side++ {
+			var e [8]byte
+			if side == 0 {
+				copy(e[:], pair[0:8])
+			} else {
+				copy(e[:], pair[8:16])
+			}
+			if e[1] != g.room {
+				continue
+			}
+			// Type $19 = open trap (player falls through)
+			// Type $18 = closed trap (safe to walk over)
+			if e[0] != 0x19 {
+				continue
+			}
+
+			ex := int(e[3])
+			ey := int(e[4])
+			if abs(px-ex) >= trapDist || abs(py-ey) >= trapDist {
+				continue
+			}
+
+			// Player falls through — get destination from other side
+			var dest [8]byte
+			if side == 0 {
+				copy(dest[:], pair[8:16])
+			} else {
+				copy(dest[:], pair[0:8])
+			}
+
+			destRoom := dest[1]
+			destX := int(dest[3])
+			destY := int(dest[4])
+
 			destRA := data.RoomAttrs[destRoom]
 			destStyle := data.RoomStyles[destRA.Style]
 			destRW := int(destStyle.Width)
