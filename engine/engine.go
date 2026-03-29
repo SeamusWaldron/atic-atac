@@ -611,7 +611,7 @@ func (g *GameEnv) spawnItems() {
 		e.X = int(k.init[3])
 		e.Y = int(k.init[4])
 		e.Attr = k.init[5]
-		e.Graphic = k.typ
+		e.Graphic = k.init[0] // graphic from Z80 data (e.g. $81 for key sprite)
 	}
 
 	// Spawn some food items from the food init table
@@ -964,12 +964,22 @@ func (g *GameEnv) drawEntities() {
 			}
 
 		case entity.TypeKey, entity.TypeFood, entity.TypeCollectible:
-			// Small marker: single bright pixel cluster
-			x, y := e.X, e.Y
-			g.buf.SetPixel(x, y)
-			g.buf.SetPixel(x+1, y)
-			g.buf.SetPixel(x, y+1)
-			g.buf.SetPixel(x+1, y+1)
+			// Draw item sprite using graphic ID from entity data.
+			// Z80 uses (graphicID-1) indexing into sprite_table.
+			graphicID := e.Graphic
+			if graphicID == 0 {
+				break
+			}
+			flatIdx := int(graphicID) - 1
+			group := flatIdx / 4
+			frame := flatIdx % 4
+			if group < len(data.GenSpriteTable) {
+				addr := data.GenSpriteTable[group][frame]
+				if spr := data.GenMenuIcons[addr]; spr != nil {
+					g.buf.DrawSpriteXOR(e.X, e.Y, spr)
+					g.paintEntityAttr(e.X, e.Y, 2, int(spr[0]), e.Attr)
+				}
+			}
 		}
 	})
 }
