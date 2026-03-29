@@ -638,6 +638,10 @@ func (g *GameEnv) cycleDoors() {
 	}
 	g.doorCycleTimer = 94
 
+	// Z80: each door entity checks the shared timer. The FIRST door whose
+	// handler runs when timer=0 toggles itself and resets the timer.
+	// Since entities process in order, this always toggles the first
+	// managed door in the room's entity list.
 	entities := data.GenRoomEntityData[int(g.room)]
 	for i, pair := range entities {
 		for side := 0; side < 2; side++ {
@@ -655,10 +659,9 @@ func (g *GameEnv) cycleDoors() {
 			if !ok {
 				continue
 			}
-			// Only cycle doors that are in the $20-$23 range
 			if rt >= 0x20 && rt <= 0x23 {
-				g.doorTypes[key] = rt ^ 0x01 // toggle bit 0
-				return
+				g.doorTypes[key] = rt ^ 0x01
+				return // only ONE door toggles per timer expiry
 			}
 		}
 	}
