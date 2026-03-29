@@ -924,7 +924,7 @@ func (g *GameEnv) clearDoorFrameLines() {
 		}
 
 		x := int(e[3])
-		y := int(e[4]) - 1 // match dec d in h_room_item
+		y := int(e[4]) // raw Y — draw_rot_obj reloads without dec d
 
 		onTop := y < roomCentreY-rh
 		onBottom := y > roomCentreY+rh
@@ -942,16 +942,7 @@ func (g *GameEnv) clearDoorFrameLines() {
 			sprH = 32
 		}
 		if onTop || onBottom || onLeft || onRight {
-			endY := y
-			if onTop || onBottom {
-				endY = y + 3 // extend further below for frame line
-			}
-			startY := y - sprH + 1
-			// Also extend upward for top doors where frame line might be above sprite
-			if onTop {
-				startY = y - sprH - 1
-			}
-			for py := startY; py <= endY; py++ {
+			for py := y - sprH + 1; py <= y; py++ {
 				for px := x; px < x+sprW; px++ {
 					g.buf.ClearPixel(px, py)
 				}
@@ -977,7 +968,9 @@ func (g *GameEnv) drawDecorations() {
 
 		typeID := int(e[0])
 		x := int(e[3])
-		y := int(e[4]) - 1 // Z80 does dec d ($9204) before rendering
+		// Z80: h_room_item does dec d for ATTRS only ($9204). draw_rot_obj
+		// at $9213 RELOADS raw Y from (ix+$04) for PIXEL rendering.
+		y := int(e[4])
 
 		// gfx_data index is type-1 (Z80 does dec c at $9998)
 		gfxIdx := typeID - 1
