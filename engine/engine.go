@@ -85,8 +85,10 @@ type GameEnv struct {
 	visitPercent byte
 
 	// Door system
-	roomDoors map[byte][]data.RoomDoor
-	doorTimer int
+	roomDoors  map[byte][]data.RoomDoor
+	doorTimer  int
+	doorStates map[uint32]bool // key = (room<<16 | entityIdx), value = true=open, false=closed
+	doorCycleTimer int         // Z80 $5E2E: counts down from 94, toggles a door when 0
 
 	// Rendering
 	roomDrawn bool
@@ -157,6 +159,7 @@ func (g *GameEnv) StartGame() {
 	g.hudDirty = true
 	g.entities.Clear()
 	g.spawnItems()
+	g.randomiseDoorStates()
 
 	ch := data.Characters[g.character]
 	g.room = ch.StartRoom
@@ -257,10 +260,13 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 		g.score += 5000
 	}
 
-	// Door timer
+	// Door transition cooldown timer
 	if g.doorTimer > 0 {
 		g.doorTimer--
 	}
+
+	// Door open/close cycling (Z80 $5E2E timer, 94 frames)
+	g.cycleDoors()
 
 	// Render
 	g.clearPlayArea()
@@ -546,6 +552,81 @@ func (g *GameEnv) checkDecoCollision(px, py int) bool {
 		}
 	}
 	return false
+}
+
+// randomiseDoorStates sets initial door open/closed states.
+// Z80 randomise_doors at $94F5: ~56% of paired doors get toggled.
+func (g *GameEnv) randomiseDoorStates() {
+	g.doorStates = make(map[uint32]bool)
+	g.doorCycleTimer = 94
+
+	// For each room's entity pairs, if it's a normal door (type $01-$02),
+	// randomly set it to open (true) or closed (false).
+	// Default: all doors start open. ~56% get toggled to closed.
+	for room, entities := range data.GenRoomEntityData {
+		for i, pair := range entities {
+			var e [8]byte
+			if pair[1] == byte(room) {
+				copy(e[:], pair[0:8])
+			} else if pair[9] == byte(room) {
+				copy(e[:], pair[8:16])
+			} else {
+				continue
+			}
+			typeID := e[0]
+			// Only normal doors toggle (types $01-$02, $20-$23)
+			// Locked doors ($08-$0F) stay locked
+			if typeID == 0x01 || typeID == 0x02 {
+				key := uint32(room)<<16 | uint32(i)
+				// ~56% chance of being closed (Z80 uses ROM data, ~43% >= $70)
+				if g.nextRand() > 0x70 {
+					g.doorStates[key] = false // closed
+				} else {
+					g.doorStates[key] = true // open
+				}
+			}
+		}
+	}
+}
+
+// isDoorOpen checks if a specific door in a room is open.
+func (g *GameEnv) isDoorOpen(room byte, entityIdx int) bool {
+	key := uint32(room)<<16 | uint32(entityIdx)
+	open, exists := g.doorStates[key]
+	if !exists {
+		return true // default to open if not tracked
+	}
+	return open
+}
+
+// cycleDoors toggles a random door in the current room every 94 frames.
+// Z80: door timer $5E2E counts down from $5E (94), toggles on zero.
+func (g *GameEnv) cycleDoors() {
+	g.doorCycleTimer--
+	if g.doorCycleTimer > 0 {
+		return
+	}
+	g.doorCycleTimer = 94 // reset
+
+	// Find a normal door in the current room and toggle it
+	entities := data.GenRoomEntityData[int(g.room)]
+	for i, pair := range entities {
+		var e [8]byte
+		if pair[1] == g.room {
+			copy(e[:], pair[0:8])
+		} else if pair[9] == g.room {
+			copy(e[:], pair[8:16])
+		} else {
+			continue
+		}
+		typeID := e[0]
+		if typeID == 0x01 || typeID == 0x02 {
+			key := uint32(g.room)<<16 | uint32(i)
+			g.doorStates[key] = !g.doorStates[key]
+			g.roomDrawn = false // force redraw to show new door state
+			return
+		}
+	}
 }
 
 func inWallBounds(pos, centre, dimension int) bool {
@@ -1073,6 +1154,33 @@ func (g *GameEnv) checkDoorExit(dx, dy, rw, rh int) {
 			continue
 		}
 
+		// Check if this door is closed — find the matching entity pair
+		// and check its state. Closed doors block passage.
+		if d.Type == 0x01 || d.Type == 0x02 {
+			doorClosed := false
+			entities := data.GenRoomEntityData[int(g.room)]
+			for ei, pair := range entities {
+				var e [8]byte
+				if pair[1] == g.room {
+					copy(e[:], pair[0:8])
+				} else if pair[9] == g.room {
+					copy(e[:], pair[8:16])
+				} else {
+					continue
+				}
+				if (e[0] == 0x01 || e[0] == 0x02) &&
+					int(e[3]) == int(d.X) && int(e[4]) == int(d.Y) {
+					if !g.isDoorOpen(g.room, ei) {
+						doorClosed = true
+					}
+					break
+				}
+			}
+			if doorClosed {
+				continue // can't pass through closed door
+			}
+		}
+
 		destRA := data.RoomAttrs[d.DestRoom]
 		destStyle := data.RoomStyles[destRA.Style]
 		destRW := int(destStyle.Width)
@@ -1292,7 +1400,7 @@ func (g *GameEnv) clearDoorFrameLines() {
 
 func (g *GameEnv) drawDecorations() {
 	entities := data.GenRoomEntityData[int(g.room)]
-	for _, pair := range entities {
+	for ei, pair := range entities {
 		// Each entry is a 16-byte linked pair: side A (bytes 0-7) + side B (bytes 8-15).
 		// The Z80 checks side A's room (byte 1) — if it doesn't match the
 		// current room, it uses side B (+8 bytes). This is the XOR $08 trick.
@@ -1315,6 +1423,12 @@ func (g *GameEnv) drawDecorations() {
 		gfxIdx := typeID - 1
 		if gfxIdx < 0 || gfxIdx >= 39 {
 			continue
+		}
+
+		// For normal doors: swap to closed sprite if door is closed
+		// Open door = gfxIdx 1 (door_frame), Closed door = gfxIdx 31 (door_shut)
+		if (typeID == 0x01 || typeID == 0x02) && !g.isDoorOpen(g.room, ei) {
+			gfxIdx = 31 - 1 // door_shut sprite (type $20, gfxIdx=31)
 		}
 
 		// Skip chicken sprites (gfx types 18/19 = HUD energy bar, not room decor)
