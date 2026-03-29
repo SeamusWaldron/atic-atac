@@ -46,6 +46,7 @@ func main() {
 	genDoorData()
 	genPlayerSprites()
 	genCharset()
+	genMenuIconSprites()
 	genCreatureSprites()
 	genItemData()
 	genRoomEntities()
@@ -588,6 +589,51 @@ func genItemData() {
 		b := getBytes(addr, 8)
 		fmt.Fprintf(f, "\t{0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X},\n",
 			b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7])
+	}
+	fmt.Fprintln(f, "}")
+}
+
+func genMenuIconSprites() {
+	f := createFile("data/gen_menuicons.go")
+	defer f.Close()
+
+	fmt.Fprintln(f, "package data")
+	fmt.Fprintln(f, "")
+	fmt.Fprintln(f, "// Auto-generated from aticatac.skool — do not edit.")
+	fmt.Fprintln(f, "")
+	fmt.Fprintln(f, "// GenMenuIcons: sprite data for menu screen icons.")
+	fmt.Fprintln(f, "// Format: first byte = height, then 2 bytes per row.")
+	fmt.Fprintln(f, "// Keyed by sprite table address.")
+	fmt.Fprintln(f, "var GenMenuIcons = map[uint16][]byte{")
+
+	// Extract all sprites referenced by the sprite table (skip duplicate addresses)
+	seen := make(map[uint16]bool)
+	for group := 0; group < 41; group++ {
+		base := uint16(0xA4BE) + uint16(group*8)
+		for frame := 0; frame < 4; frame++ {
+			addr := getWord(base + uint16(frame*2))
+			if addr == 0 || seen[addr] {
+				continue
+			}
+			seen[addr] = true
+			height := int(getByte(addr))
+			if height == 0 || height > 40 {
+				continue
+			}
+			total := 1 + height*2
+			b := getBytes(addr, total)
+			fmt.Fprintf(f, "\t0x%04X: {", addr)
+			for j, v := range b {
+				if j > 0 {
+					fmt.Fprint(f, ",")
+				}
+				if j > 0 && j%16 == 0 {
+					fmt.Fprint(f, "\n\t\t")
+				}
+				fmt.Fprintf(f, "0x%02X", v)
+			}
+			fmt.Fprintf(f, "}, // group %d frame %d\n", group, frame)
+		}
 	}
 	fmt.Fprintln(f, "}")
 }

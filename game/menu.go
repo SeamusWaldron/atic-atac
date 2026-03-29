@@ -159,33 +159,10 @@ func paintMenuAttr(buf *screen.Buffer, x, y, heightPx int, attr byte) {
 	}
 }
 
-// getSpriteByAddr returns sprite data for a given address from GenDecoSprites
-// or from the player sprite arrays. Returns nil if not found.
+// getSpriteByAddr returns sprite data for a given address.
 func getSpriteByAddr(addr uint16) []byte {
-	// Check player sprites (Knight group 0-3, Wizard 4-7, Serf 8-11)
-	allSprites := [...]*[4][3][]byte{
-		&data.KnightSprites,
-		&data.WizardSprites,
-		&data.SerfSprites,
-	}
-
-	// Search through sprite table for matching address
-	for group := 0; group < len(data.GenSpriteTable); group++ {
-		for frame := 0; frame < 4; frame++ {
-			if data.GenSpriteTable[group][frame] == addr {
-				// Found the group/frame. Try to get sprite data.
-				charIdx := group / 4 // 0=Knight, 1=Wizard, 2=Serf
-				dirIdx := group % 4
-				frameIdx := frame
-				if frameIdx > 2 {
-					frameIdx = 1 // frame pattern 0,1,2,1
-				}
-				if charIdx < len(allSprites) && dirIdx < 4 && frameIdx < 3 {
-					spr := allSprites[charIdx]
-					return spr[dirIdx][frameIdx]
-				}
-			}
-		}
+	if spr, ok := data.GenMenuIcons[addr]; ok {
+		return spr
 	}
 	return nil
 }
