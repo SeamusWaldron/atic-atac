@@ -85,10 +85,14 @@ type GameEnv struct {
 	visitPercent byte
 
 	// Door system
-	roomDoors  map[byte][]data.RoomDoor
-	doorTimer  int
-	doorStates map[uint32]bool // key = (room<<16 | entityIdx), value = true=open, false=closed
-	doorCycleTimer int         // Z80 $5E2E: counts down from 94, toggles a door when 0
+	roomDoors      map[byte][]data.RoomDoor
+	doorTimer      int
+	// doorTypes stores runtime entity types for doors that have been modified
+	// by randomise_doors or door cycling. Key = (room<<16 | entityIdx).
+	// Z80 modifies the entity type byte directly: $01/$02 become $20-$23.
+	// Bit 0 = open(1)/closed(0). XOR $01 toggles state.
+	doorTypes      map[uint32]byte
+	doorCycleTimer int
 
 	// Rendering
 	roomDrawn bool
@@ -271,8 +275,8 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 		g.doorTimer--
 	}
 
-	// Door cycling disabled until properly implemented
-	// g.cycleDoors()
+	// Door open/close cycling (Z80 $5E2E timer, XOR $01 toggles bit 0)
+	g.cycleDoors()
 
 	// Render
 	g.clearPlayArea()
@@ -560,77 +564,102 @@ func (g *GameEnv) checkDecoCollision(px, py int) bool {
 	return false
 }
 
-// randomiseDoorStates sets initial door open/closed states.
-// Z80 randomise_doors at $94F5: ~56% of paired doors get toggled.
+// randomiseDoorStates initialises the runtime door type map.
+// Z80 randomise_doors at $94F5: overwrites types $01/$02 with $20/$22
+// (closed handler types) for ~56% of doors. Others become $21/$23 (open).
 func (g *GameEnv) randomiseDoorStates() {
-	g.doorStates = make(map[uint32]bool)
+	g.doorTypes = make(map[uint32]byte)
 	g.doorCycleTimer = 94
 
-	// For each room's entity pairs, if it's a normal door (type $01-$02),
-	// randomly set it to open (true) or closed (false).
-	// Default: all doors start open. ~56% get toggled to closed.
 	for room, entities := range data.GenRoomEntityData {
 		for i, pair := range entities {
-			var e [8]byte
-			if pair[1] == byte(room) {
-				copy(e[:], pair[0:8])
-			} else if pair[9] == byte(room) {
-				copy(e[:], pair[8:16])
-			} else {
-				continue
-			}
-			typeID := e[0]
-			// Only normal doors toggle (types $01-$02, $20-$23)
-			// Locked doors ($08-$0F) stay locked
-			if typeID == 0x01 || typeID == 0x02 {
-				key := uint32(room)<<16 | uint32(i)
-				// ~56% chance of being closed (Z80 uses ROM data, ~43% >= $70)
-				if g.nextRand() > 0x70 {
-					g.doorStates[key] = false // closed
+			// Check both sides of the pair
+			for side := 0; side < 2; side++ {
+				var e [8]byte
+				if side == 0 {
+					copy(e[:], pair[0:8])
 				} else {
-					g.doorStates[key] = true // open
+					copy(e[:], pair[8:16])
+				}
+				if e[1] != byte(room) {
+					continue
+				}
+				typeID := e[0]
+				// Only convert initial door types ($01=cave, $02=normal)
+				// to runtime handler types ($20-$23)
+				if typeID == 0x01 {
+					// Cave doorway: ~56% become closed ($22), rest open ($23)
+					key := uint32(room)<<16 | uint32(i)
+					if g.nextRand() > 0x70 {
+						g.doorTypes[key] = 0x22 // closed cave
+					} else {
+						g.doorTypes[key] = 0x23 // open cave
+					}
+				} else if typeID == 0x02 {
+					// Normal doorway: ~56% become closed ($20), rest open ($21)
+					key := uint32(room)<<16 | uint32(i)
+					if g.nextRand() > 0x70 {
+						g.doorTypes[key] = 0x20 // closed normal
+					} else {
+						g.doorTypes[key] = 0x21 // open normal
+					}
 				}
 			}
 		}
 	}
 }
 
-// isDoorOpen checks if a specific door in a room is open.
-func (g *GameEnv) isDoorOpen(room byte, entityIdx int) bool {
+// getDoorType returns the runtime entity type for a door.
+// If not in doorTypes map, returns the original type from entity data.
+func (g *GameEnv) getDoorType(room byte, entityIdx int) byte {
 	key := uint32(room)<<16 | uint32(entityIdx)
-	open, exists := g.doorStates[key]
-	if !exists {
-		return true // default to open if not tracked
+	if rt, ok := g.doorTypes[key]; ok {
+		return rt
 	}
-	return open
+	return 0 // not a managed door
 }
 
-// cycleDoors toggles a random door in the current room every 94 frames.
-// Z80: door timer $5E2E counts down from $5E (94), toggles on zero.
+// isDoorOpenRuntime checks if a door is open using the runtime type.
+// Z80: bit 0 of type = 1 means open, 0 means closed.
+func (g *GameEnv) isDoorOpenRuntime(room byte, entityIdx int) bool {
+	rt := g.getDoorType(room, entityIdx)
+	if rt == 0 {
+		return true // unmanaged doors default to open
+	}
+	return rt&0x01 != 0 // bit 0 = open
+}
+
+// cycleDoors toggles a door in the current room every 94 frames.
+// Z80: XOR $01 on the entity type toggles bit 0 (open/closed).
 func (g *GameEnv) cycleDoors() {
 	g.doorCycleTimer--
 	if g.doorCycleTimer > 0 {
 		return
 	}
-	g.doorCycleTimer = 94 // reset
+	g.doorCycleTimer = 94
 
-	// Find a normal door in the current room and toggle it
 	entities := data.GenRoomEntityData[int(g.room)]
 	for i, pair := range entities {
-		var e [8]byte
-		if pair[1] == g.room {
-			copy(e[:], pair[0:8])
-		} else if pair[9] == g.room {
-			copy(e[:], pair[8:16])
-		} else {
-			continue
-		}
-		typeID := e[0]
-		if typeID == 0x01 || typeID == 0x02 {
+		for side := 0; side < 2; side++ {
+			var e [8]byte
+			if side == 0 {
+				copy(e[:], pair[0:8])
+			} else {
+				copy(e[:], pair[8:16])
+			}
+			if e[1] != g.room {
+				continue
+			}
 			key := uint32(g.room)<<16 | uint32(i)
-			g.doorStates[key] = !g.doorStates[key]
-			g.roomDrawn = false // force redraw to show new door state
-			return
+			rt, ok := g.doorTypes[key]
+			if !ok {
+				continue
+			}
+			// Only cycle doors that are in the $20-$23 range
+			if rt >= 0x20 && rt <= 0x23 {
+				g.doorTypes[key] = rt ^ 0x01 // toggle bit 0
+				return
+			}
 		}
 	}
 }
@@ -1533,8 +1562,32 @@ func (g *GameEnv) checkDoorExit(dx, dy, rw, rh int) {
 			continue
 		}
 
-		// Door state blocking disabled until cycling is properly implemented
-		// All doors currently treated as open.
+		// Check if this door is closed using runtime door type.
+		// Closed doors (bit 0 = 0) block passage.
+		if d.Type == 0x01 || d.Type == 0x02 {
+			entities := data.GenRoomEntityData[int(g.room)]
+			blocked := false
+			for ei, pair := range entities {
+				var e [8]byte
+				if pair[1] == g.room {
+					copy(e[:], pair[0:8])
+				} else if pair[9] == g.room {
+					copy(e[:], pair[8:16])
+				} else {
+					continue
+				}
+				if (e[0] == 0x01 || e[0] == 0x02) &&
+					int(e[3]) == int(d.X) && int(e[4]) == int(d.Y) {
+					if !g.isDoorOpenRuntime(g.room, ei) {
+						blocked = true
+					}
+					break
+				}
+			}
+			if blocked {
+				continue
+			}
+		}
 
 		// Locked door check: types $08-$0F require matching colour key
 		// Z80 check_key_colour at $9222: door type & $03 = colour index
@@ -1817,10 +1870,19 @@ func (g *GameEnv) drawDecorations() {
 			continue
 		}
 
-		// Door state rendering disabled — the cycling/state system needs
-		// proper implementation matching Z80 before it can swap sprites.
-		// For now all doors render as open (horseshoe arch).
-		_ = ei
+		// Door state rendering: check runtime type for managed doors.
+		// Open doors ($21/$23) use gfxIdx 1 (horseshoe arch).
+		// Closed doors ($20/$22) use gfxIdx 31 (solid door).
+		if typeID == 0x01 || typeID == 0x02 {
+			rt := g.getDoorType(g.room, ei)
+			if rt >= 0x20 && rt <= 0x23 {
+				if rt&0x01 == 0 {
+					// Closed: use door_shut sprite (gfxIdx 31)
+					gfxIdx = 31
+				}
+				// Open: keep original gfxIdx (horseshoe arch)
+			}
+		}
 
 		// Skip chicken sprites (gfx types 18/19 = HUD energy bar, not room decor)
 		if gfxIdx == 18 || gfxIdx == 19 {
