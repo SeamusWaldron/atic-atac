@@ -1055,29 +1055,21 @@ func paintDecoAttrs(buf *screen.Buffer, startCol, startRow, aw, ah int,
 				// 180° + h-flip: reversed rows AND columns
 				dataIdx = (ah-1-r)*aw + (aw - 1 - c)
 			case 2:
-				// 90° rotation: swap iteration (column-major)
-				dataIdx = c*ah + r
-				if dataIdx >= len(attrValues) {
-					continue
-				}
+				// 90° CW: start at end, stride backward through rows
+				dataIdx = (ah-1-r)*aw + c
 			case 3:
-				// 90° CCW rotation
-				dataIdx = (aw-1-c)*ah + r
-				if dataIdx >= len(attrValues) {
-					continue
-				}
+				// Mode 3 (RIGHT wall): inner=height with stride aw, outer=width
+				// Z80: add_de_b (stride forward by B=width), inc de between columns
+				// Reads data[c * aw + r] — column-major, forward
+				dataIdx = c*aw + r
 			case 6:
-				// 270° CW
-				dataIdx = c*ah + (ah - 1 - r)
-				if dataIdx >= len(attrValues) {
-					continue
-				}
+				// 270° CW: reversed column order
+				dataIdx = r*aw + (aw - 1 - c)
 			case 7:
-				// 270° CCW
-				dataIdx = (aw-1-c)*ah + (ah - 1 - r)
-				if dataIdx >= len(attrValues) {
-					continue
-				}
+				// Mode 7 (LEFT wall): hl_de_b_c starts at last row, sbc_de_b backward
+				// Z80: starts at data[(ah-1)*aw], strides backward by aw
+				// Reads data[(ah-1-c) * aw + r] — column-major from end
+				dataIdx = (ah-1-c)*aw + r
 			default:
 				dataIdx = r*aw + c
 			}
