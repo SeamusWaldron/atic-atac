@@ -80,15 +80,17 @@ func DrawMenu(buf *screen.Buffer, ms *MenuState) {
 	}
 
 	// Menu icons from Z80 $A331-$A379
-	// Keyboard icon (2 parts): graphic $48/$49 at (32,28)/(48,28), attr $43 (magenta)
+	// Each icon is two 16px halves side by side.
+	// Entity data: X=$20(32) for left half, X=$30(48) for right half.
+	// Keyboard: $48 at X=32, $49 at X=48
 	drawMenuIcon(buf, 0x48, 32, 28, 0x43)
 	drawMenuIcon(buf, 0x49, 48, 28, 0x43)
 
-	// Joystick icon (2 parts): graphic $4A/$4B at (32,55)/(48,55), attr $44 (green)
+	// Joystick: $4A at X=32, $4B at X=48
 	drawMenuIcon(buf, 0x4A, 32, 55, 0x44)
 	drawMenuIcon(buf, 0x4B, 48, 55, 0x44)
 
-	// Cursor icon (2 parts): graphic $32/$33 at (32,79)/(48,79), attr $46 (yellow)
+	// Cursor: $32 at X=32, $33 at X=48
 	drawMenuIcon(buf, 0x32, 32, 79, 0x46)
 	drawMenuIcon(buf, 0x33, 48, 79, 0x46)
 
@@ -96,9 +98,10 @@ func DrawMenu(buf *screen.Buffer, ms *MenuState) {
 	charGraphics := [3]byte{0x01, 0x11, 0x21}
 	charYPositions := [3]int{103, 127, 151}
 	for i, gfx := range charGraphics {
-		// Look up sprite from sprite table
-		group := int(gfx) / 4
-		frame := int(gfx) % 4
+		// Z80 sprite lookup: (graphicID - 1) * 2
+		flatIdx := int(gfx) - 1
+		group := flatIdx / 4
+		frame := flatIdx % 4
 		if group < len(data.GenSpriteTable) {
 			sprAddr := data.GenSpriteTable[group][frame]
 			if sprAddr != 0 {
@@ -121,9 +124,11 @@ func DrawMenu(buf *screen.Buffer, ms *MenuState) {
 }
 
 // drawMenuIcon draws a menu icon sprite by graphic ID.
+// Z80 sprite lookup: sprite_table[(graphicID - 1) * 2], NOT graphicID/4.
 func drawMenuIcon(buf *screen.Buffer, graphicID byte, x, y int, attr byte) {
-	group := int(graphicID) / 4
-	frame := int(graphicID) % 4
+	flatIdx := int(graphicID) - 1
+	group := flatIdx / 4
+	frame := flatIdx % 4
 	if group >= len(data.GenSpriteTable) {
 		return
 	}
