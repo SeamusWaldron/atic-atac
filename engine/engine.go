@@ -1014,7 +1014,20 @@ func (g *GameEnv) drawDecorations() {
 		// Attribute painting: h_room_item uses Y-1 for attrs (dec d at $9204).
 		// xy_to_attr maps pixel (X, Y-1) to character cell (X/8, (Y-1)/8).
 		// Attr data paints UPWARD from that cell (sbc hl, $0020 in Z80).
-		attrData, hasAttr := data.GenDecoAttrs[gfxIdx]
+		// For side-wall locked doors (rotation modes 3,6,7 with locked door
+		// types 0x08-0x0F), use plain door frame attrs (gfxIdx 1) instead
+		// of lock-specific attrs. In the original, lock-colour cells land on
+		// pixels-free cells (the arch opening) and are invisible. Our pixel
+		// rotation differs slightly, making them visible. Using door frame
+		// attrs ($43 border + $00 skip) matches the original's visual output.
+		attrGfxIdx := gfxIdx
+		if (mode == 3 || mode == 6 || mode == 7) && typeID >= 0x08 && typeID <= 0x0F {
+			if frameAttr, ok := data.GenDecoAttrs[1]; ok {
+				_ = frameAttr
+				attrGfxIdx = 1 // use plain door frame attrs
+			}
+		}
+		attrData, hasAttr := data.GenDecoAttrs[attrGfxIdx]
 		if hasAttr && len(attrData) >= 2 {
 			aw := int(attrData[0])
 			ah := int(attrData[1])
