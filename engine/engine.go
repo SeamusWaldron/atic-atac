@@ -1533,32 +1533,8 @@ func (g *GameEnv) checkDoorExit(dx, dy, rw, rh int) {
 			continue
 		}
 
-		// Check if this door is closed — find the matching entity pair
-		// and check its state. Closed doors block passage.
-		if d.Type == 0x01 || d.Type == 0x02 {
-			doorClosed := false
-			entities := data.GenRoomEntityData[int(g.room)]
-			for ei, pair := range entities {
-				var e [8]byte
-				if pair[1] == g.room {
-					copy(e[:], pair[0:8])
-				} else if pair[9] == g.room {
-					copy(e[:], pair[8:16])
-				} else {
-					continue
-				}
-				if (e[0] == 0x01 || e[0] == 0x02) &&
-					int(e[3]) == int(d.X) && int(e[4]) == int(d.Y) {
-					if !g.isDoorOpen(g.room, ei) {
-						doorClosed = true
-					}
-					break
-				}
-			}
-			if doorClosed {
-				continue // can't pass through closed door
-			}
-		}
+		// Door state blocking disabled until cycling is properly implemented
+		// All doors currently treated as open.
 
 		// Locked door check: types $08-$0F require matching colour key
 		// Z80 check_key_colour at $9222: door type & $03 = colour index
