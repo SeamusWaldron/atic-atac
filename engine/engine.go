@@ -1181,6 +1181,28 @@ func (g *GameEnv) checkDoorExit(dx, dy, rw, rh int) {
 			}
 		}
 
+		// Locked door check: types $08-$0F require matching colour key
+		// Z80 check_key_colour at $9222: door type & $03 = colour index
+		// Key attrs table at $925C: [$42=red, $44=green, $45=cyan, $46=yellow]
+		if d.Type >= 0x08 && d.Type <= 0x0F {
+			// Z80 key colour table at $925C: [red, green, cyan, yellow]
+			keyNames := [4]string{"RED", "GREEN", "CYAN", "YELLOW"}
+			requiredKey := keyNames[d.Type&0x03]
+			keySlot := -1
+			for si, slot := range g.inventory {
+				if slot.Occupied && slot.Name == requiredKey {
+					keySlot = si
+					break
+				}
+			}
+			if keySlot < 0 {
+				continue // locked — no matching key
+			}
+			// Consume the key
+			g.inventory[keySlot] = InvSlot{}
+			g.hudDirty = true
+		}
+
 		destRA := data.RoomAttrs[d.DestRoom]
 		destStyle := data.RoomStyles[destRA.Style]
 		destRW := int(destStyle.Width)
