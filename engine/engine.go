@@ -1349,12 +1349,68 @@ func (g *GameEnv) drawWeapon() {
 	if !g.weaponActive {
 		return
 	}
-	// Simple weapon projectile: small cross
-	x, y := g.weaponX, g.weaponY
-	for d := -2; d <= 2; d++ {
-		g.buf.SetPixel(x+d, y)
-		g.buf.SetPixel(x, y+d)
+
+	// Weapon graphic and colour per character class from Z80:
+	// Knight: axe base $40, 8 rotating frames, colour $42 (red)
+	// Wizard: fireball base $34, 4 cycling frames, colour $45/$47 (cyan/white)
+	// Serf: sword base $38, 8 directional frames, colour $46 (yellow)
+	var graphicID byte
+	var weaponAttr byte
+
+	switch g.character {
+	case data.Knight:
+		// Axe: 8 rotating frames. Z80: cpl, rra, and $07 on frame counter
+		frame := (^byte(g.weaponFrame) >> 1) & 0x07
+		graphicID = 0x40 + frame
+		weaponAttr = 0x42 // bright red
+
+	case data.Wizard:
+		// Fireball: 4 cycling frames. Z80: inc, and $03
+		frame := byte(g.weaponFrame) & 0x03
+		graphicID = 0x34 + frame
+		// Colour alternates: Z80 uses ($5C78) rla, and $02, add $45
+		if g.weaponFrame&0x02 == 0 {
+			weaponAttr = 0x45 // bright cyan
+		} else {
+			weaponAttr = 0x47 // bright white
+		}
+
+	case data.Serf:
+		// Sword: 8 directional frames based on velocity
+		dir := byte(0)
+		if g.weaponDY < 0 {
+			dir = 2 // up
+		} else if g.weaponDY > 0 {
+			dir = 6 // down
+		}
+		if g.weaponDX > 0 {
+			dir++ // right
+		} else if g.weaponDX < 0 {
+			if dir == 0 {
+				dir = 7
+			} else {
+				dir--
+			}
+		}
+		graphicID = 0x38 + (dir & 0x07)
+		weaponAttr = 0x46 // bright yellow
 	}
+
+	// Look up sprite via (graphicID-1) indexing
+	flatIdx := int(graphicID) - 1
+	group := flatIdx / 4
+	frame := flatIdx % 4
+	if group >= len(data.GenSpriteTable) {
+		return
+	}
+	addr := data.GenSpriteTable[group][frame]
+	spr := data.GenMenuIcons[addr]
+	if spr == nil {
+		return
+	}
+
+	g.buf.DrawSpriteXOR(g.weaponX, g.weaponY, spr)
+	g.paintEntityAttr(g.weaponX, g.weaponY, 2, int(spr[0]), weaponAttr)
 }
 
 func (g *GameEnv) drawDoors() {
