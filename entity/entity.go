@@ -58,7 +58,8 @@ var CreatureGraphics = [16]byte{
 const MaxCreaturesPerRoom = 3
 
 // MaxEntities is the total entity pool size.
-const MaxEntities = 64
+// Z80 has ~78 entities at game start (48 food + 7 keys + 11 collectibles + creatures).
+const MaxEntities = 128
 
 // Pool holds all active entities.
 type Pool struct {

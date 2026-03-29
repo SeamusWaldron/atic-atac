@@ -587,35 +587,66 @@ func (g *GameEnv) updateWeapon() {
 // ---------- ITEMS & INVENTORY ----------
 
 func (g *GameEnv) spawnItems() {
-	// Spawn keys in their designated rooms from the original data
-	keys := []struct {
-		init data.EntityInit
-		name string
-		typ  byte
-	}{
-		{data.GreenKeyInit, "GREEN KEY", ItemKeyGreen},
-		{data.RedKeyInit, "RED KEY", ItemKeyRed},
-		{data.CyanKeyInit, "CYAN KEY", ItemKeyCyan},
-		{data.YellowKeyInit, "YELLOW KEY", ItemKeyYellow},
-		{data.ACGKeyInit[0], "ACG KEY 1", ItemACGKey1},
-		{data.ACGKeyInit[1], "ACG KEY 2", ItemACGKey2},
-		{data.ACGKeyInit[2], "ACG KEY 3", ItemACGKey3},
+	// --- ACG key pieces: randomised to one of 8 room sets ---
+	// Z80 place_key_pieces at $94B6: (FRAMES + counter_low) & 7 selects set
+	acgRoomTable := [8][3]byte{
+		{0x81, 0x45, 0x7C}, {0x85, 0x49, 0x2B}, {0x6A, 0x3B, 0x7C}, {0x69, 0x71, 0x2B},
+		{0x67, 0x85, 0x7C}, {0x68, 0x7F, 0x2B}, {0x4D, 0x73, 0x7C}, {0x17, 0x10, 0x2B},
 	}
-	for _, k := range keys {
+	acgSet := int(g.nextRand()) & 0x07
+	for i, k := range data.ACGKeyInit {
 		e := g.entities.Spawn()
 		if e == nil {
 			break
 		}
 		e.Type = entity.TypeKey
-		e.Room = k.init[1]
-		e.X = int(k.init[3])
-		e.Y = int(k.init[4])
-		e.Attr = k.init[5]
-		e.Graphic = k.init[0] // graphic from Z80 data (e.g. $81 for key sprite)
+		e.Room = acgRoomTable[acgSet][0]
+		e.X = int(acgRoomTable[acgSet][1])
+		e.Y = int(acgRoomTable[acgSet][2])
+		e.Attr = k[5]
+		e.Graphic = k[0]
+		_ = i
 	}
 
-	// Spawn some food items from the food init table
-	for i := 0; i < 12 && i < len(data.FoodInit); i++ {
+	// --- Coloured keys: each randomised to one of 8 rooms ---
+	// Z80 set_key_positions at $98D2
+	greenRooms := [8]byte{0x05, 0x06, 0x07, 0x6D, 0x25, 0x24, 0x23, 0x22}
+	redRooms := [8]byte{0x17, 0x13, 0x09, 0x0D, 0x89, 0x87, 0x80, 0x85}
+	cyanRooms := [8]byte{0x53, 0x8F, 0x41, 0x94, 0x33, 0x91, 0x39, 0x4C}
+
+	colourKeys := []struct {
+		init  data.EntityInit
+		rooms *[8]byte
+	}{
+		{data.GreenKeyInit, &greenRooms},
+		{data.RedKeyInit, &redRooms},
+		{data.CyanKeyInit, &cyanRooms},
+	}
+	for _, ck := range colourKeys {
+		e := g.entities.Spawn()
+		if e == nil {
+			break
+		}
+		e.Type = entity.TypeKey
+		e.Room = ck.rooms[int(g.nextRand())&0x07]
+		e.X = int(ck.init[3])
+		e.Y = int(ck.init[4])
+		e.Attr = ck.init[5]
+		e.Graphic = ck.init[0]
+	}
+
+	// Yellow key: fixed room (no randomisation)
+	if e := g.entities.Spawn(); e != nil {
+		e.Type = entity.TypeKey
+		e.Room = data.YellowKeyInit[1]
+		e.X = int(data.YellowKeyInit[3])
+		e.Y = int(data.YellowKeyInit[4])
+		e.Attr = data.YellowKeyInit[5]
+		e.Graphic = data.YellowKeyInit[0]
+	}
+
+	// --- ALL 48 food items ---
+	for i := 0; i < len(data.FoodInit); i++ {
 		f := data.FoodInit[i]
 		e := g.entities.Spawn()
 		if e == nil {
@@ -629,28 +660,38 @@ func (g *GameEnv) spawnItems() {
 		e.Graphic = f[0]
 	}
 
-	// Spawn collectible items
-	collectibles := []struct {
-		init data.EntityInit
-		name string
-	}{
-		{data.LeafInit, "LEAF"},
-		{data.CrucifixInit, "CRUCIFIX"},
-		{data.SpannerInit, "SPANNER"},
-		{data.WineInit, "WINE"},
-		{data.CoinInit, "COIN"},
+	// --- ALL collectible items (11 total) ---
+	allCollectibles := []data.EntityInit{
+		data.LeafInit,
+		data.CrucifixInit,
+		data.SpannerInit,
+		data.WineInit,
+		data.CoinInit,
 	}
-	for _, c := range collectibles {
+	// Add the remaining collectibles from gen_items if available
+	for i := 0; i < len(data.GenCollectibleInit); i++ {
+		init := data.GenCollectibleInit[i]
+		if init[0] != 0 {
+			allCollectibles = append(allCollectibles, init)
+		}
+	}
+	// Deduplicate (GenCollectibleInit includes the first 5 already)
+	seen := make(map[byte]bool)
+	for _, c := range allCollectibles {
+		if seen[c[0]] {
+			continue
+		}
+		seen[c[0]] = true
 		e := g.entities.Spawn()
 		if e == nil {
 			break
 		}
 		e.Type = entity.TypeCollectible
-		e.Room = c.init[1]
-		e.X = int(c.init[3])
-		e.Y = int(c.init[4])
-		e.Attr = c.init[5]
-		e.Graphic = c.init[0]
+		e.Room = c[1]
+		e.X = int(c[3])
+		e.Y = int(c[4])
+		e.Attr = c[5]
+		e.Graphic = c[0]
 	}
 }
 
