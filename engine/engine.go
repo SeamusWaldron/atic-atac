@@ -445,13 +445,23 @@ func (g *GameEnv) movePlayer(act action.Action) {
 	newX := int(g.playerX) + dx
 	xBlocked := !inWallBounds(newX, roomCentreX, rw)
 	if !xBlocked {
-		g.playerX = byte(newX)
+		// Check decoration collision on X axis
+		if g.checkDecoCollision(newX, int(g.playerY)) {
+			xBlocked = true
+		} else {
+			g.playerX = byte(newX)
+		}
 	}
 
 	newY := int(g.playerY) + dy
 	yBlocked := !inWallBounds(newY, roomCentreY, rh)
 	if !yBlocked {
-		g.playerY = byte(newY)
+		// Check decoration collision on Y axis
+		if g.checkDecoCollision(int(g.playerX), newY) {
+			yBlocked = true
+		} else {
+			g.playerY = byte(newY)
+		}
 	}
 
 	// Only check door exit when player is actively pressing into a wall
@@ -470,6 +480,72 @@ func (g *GameEnv) movePlayer(act action.Action) {
 		g.lastDX = dx
 		g.lastDY = dy
 	}
+}
+
+// checkDecoCollision returns true if position (px, py) overlaps with any
+// solid decoration in the current room. Z80 chk_decor_move at $900A.
+// Doors are excluded (bit 3 of flags = passable). Wall items excluded.
+func (g *GameEnv) checkDecoCollision(px, py int) bool {
+	entities := data.GenRoomEntityData[int(g.room)]
+	for _, pair := range entities {
+		var e [8]byte
+		if pair[1] == g.room {
+			copy(e[:], pair[0:8])
+		} else if pair[9] == g.room {
+			copy(e[:], pair[8:16])
+		} else {
+			continue
+		}
+
+		typeID := e[0]
+
+		// Skip doors (types $01-$0F and $20-$23) — player walks through them
+		if typeID >= 0x01 && typeID <= 0x0F {
+			continue
+		}
+		if typeID >= 0x20 && typeID <= 0x23 {
+			continue
+		}
+
+		// Skip wall-mounted items (shields, trophies) — they don't block
+		// These are small items on the outer frame, not floor obstacles
+		if typeID == 0x1B || typeID == 0x1C { // shields
+			continue
+		}
+		if typeID == 0x15 || typeID == 0x16 { // trophies
+			continue
+		}
+		if typeID == 0x25 || typeID == 0x26 || typeID == 0x27 { // pictures
+			continue
+		}
+
+		// Get sprite dimensions for collision box
+		gfxIdx := int(typeID) - 1
+		if gfxIdx < 0 || gfxIdx >= 39 {
+			continue
+		}
+		sprData, ok := data.GenDecoSprites[gfxIdx]
+		if !ok || len(sprData) < 2 {
+			continue
+		}
+		w := int(sprData[0]) * 8 // width in pixels
+		h := int(sprData[1])     // height in pixels
+
+		// Decoration position (entity Y = bottom of sprite)
+		ex := int(e[3])
+		ey := int(e[4])
+
+		// Collision box: player is roughly 16x18 pixels
+		const playerW = 8
+		const playerH = 8
+
+		// Check overlap: decoration occupies (ex, ey-h+1) to (ex+w-1, ey)
+		if px+playerW > ex && px-playerW < ex+w &&
+			py > ey-h && py-playerH < ey {
+			return true
+		}
+	}
+	return false
 }
 
 func inWallBounds(pos, centre, dimension int) bool {
