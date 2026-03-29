@@ -1024,8 +1024,13 @@ func (g *GameEnv) drawDecorations() {
 				startRow := attrY >> 3
 				roomAttr := data.RoomAttrs[g.room].Colour
 
+				// Skip attr painting for mode 2 (ACG exit) — the 8x5 attr grid
+			// doesn't match the rotated pixel footprint, causing colour to
+			// bleed into cells above the sprite.
+			if mode != 2 {
 				paintDecoAttrs(&g.buf, startCol, startRow, aw, ah,
 					attrData[2:], mode, roomAttr)
+			}
 			}
 		}
 	}
