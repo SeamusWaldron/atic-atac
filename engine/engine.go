@@ -1,6 +1,9 @@
 package engine
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/seamuswaldron/aticatac/action"
 	"github.com/seamuswaldron/aticatac/data"
 	"github.com/seamuswaldron/aticatac/entity"
@@ -14,9 +17,11 @@ const (
 )
 
 // InvSlot represents one inventory slot.
+// Z80 inventory at $5E30: 4 bytes per slot (entity_lo, entity_hi, graphic, attr).
 type InvSlot struct {
 	Occupied bool
-	ItemType byte // graphic ID of the item
+	ItemType byte   // graphic ID of the item
+	Attr     byte   // colour attribute (for key colour matching)
 	Name     string
 }
 
@@ -102,6 +107,10 @@ type GameEnv struct {
 	// Rendering
 	roomDrawn bool
 	hudDirty  bool
+
+	// Trap door tunnel — 24×24 attr grid for expanding ring effect.
+	// Z80 draw_tunnel_attrs at $9774: spiral fill propagates colour outward.
+	tunnelAttrs [24][24]byte
 }
 
 // New creates a new game engine.
@@ -109,7 +118,7 @@ func New() *GameEnv {
 	g := &GameEnv{
 		roomDoors: data.BuildRoomDoors(),
 		entities:  entity.NewPool(),
-		rand:      0xACE1,
+		rand:      uint16(time.Now().UnixNano() & 0xFFFF),
 	}
 	g.Reset()
 	return g
@@ -144,6 +153,14 @@ func (g *GameEnv) Reset() {
 	g.playerX = ch.StartX
 	g.playerY = ch.StartY
 
+	// Re-seed PRNG each game — Z80 uses (FRAMES + counter_low) which
+	// varies based on when the player starts from the menu.
+	g.rand = uint16(time.Now().UnixNano() & 0xFFFF)
+	if g.rand == 0 {
+		g.rand = 1
+	}
+
+	g.doorTypes = make(map[uint32]byte)
 	g.buf.Clear()
 	g.spawnItems()
 	g.markRoomVisited(g.room)
@@ -158,6 +175,50 @@ func (g *GameEnv) State() GameState { return g.state }
 
 // Buffer returns the display buffer.
 func (g *GameEnv) Buffer() *screen.Buffer { return &g.buf }
+
+// KeyRooms returns the rooms containing key entities (for debug browsing).
+func (g *GameEnv) KeyRooms() []byte {
+	var rooms []byte
+	for i := range g.entities.Entities {
+		e := &g.entities.Entities[i]
+		if e.Active && e.Type == entity.TypeKey {
+			rooms = append(rooms, e.Room)
+		}
+	}
+	return rooms
+}
+
+// KeyInfo returns debug info about all key entities.
+func (g *GameEnv) KeyInfo() []string {
+	var info []string
+	for i := range g.entities.Entities {
+		e := &g.entities.Entities[i]
+		if e.Active && e.Type == entity.TypeKey {
+			name := "?"
+			switch e.Graphic {
+			case ItemACGKey1:
+				name = "ACG-1"
+			case ItemACGKey2:
+				name = "ACG-2"
+			case ItemACGKey3:
+				name = "ACG-3"
+			case 0x81:
+				switch e.Attr {
+				case 0x42:
+					name = "RED"
+				case 0x44:
+					name = "GREEN"
+				case 0x45:
+					name = "CYAN"
+				case 0x46:
+					name = "YELLOW"
+				}
+			}
+			info = append(info, fmt.Sprintf("%s room=%02X pos=(%d,%d) gfx=%02X", name, e.Room, e.X, e.Y, e.Graphic))
+		}
+	}
+	return info
+}
 
 // StartGame transitions from menu to playing state.
 func (g *GameEnv) StartGame() {
@@ -201,6 +262,10 @@ func (g *GameEnv) Step(act action.Action) StepResult {
 		g.stepDead()
 	case StateFalling:
 		g.stepFalling()
+	case StateGameOver:
+		g.stepGameOver()
+	case StateWin:
+		g.stepWin()
 	}
 
 	return StepResult{
@@ -256,11 +321,13 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 
 	// Food auto-consumption on contact (Z80 h_food at $8C63)
 	g.checkFoodPickup()
+	// Colour key auto-pickup on contact
+	g.checkColourKeyPickup()
 	// Secret passage check (Z80 h_barrel/$9421, h_bookcase/$9428, h_clock/$942F)
 	g.checkSecretPassage()
 	// Trap door check (Z80 h_trap_closed/$91BC, h_trap_open/$91C5)
 	g.checkTrapDoor()
-	// Key/collectible pickup on Enter key
+	// Key/collectible/ACG key pickup on Enter key
 	g.checkPickup(act)
 
 	// Passive energy drain: 1 point every 16 frames (original: $0F mask check)
@@ -272,10 +339,10 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 	g.updateClock()
 
 	// Check win condition: all 3 ACG key pieces collected
-	if g.hasACGKeys() {
-		g.state = StateWin
-		g.score += 5000
-	}
+	// Win condition: Z80 h_acg_exit at $961B — player must touch the ACG
+	// exit decoration (type $24) with all 3 ACG key pieces in inventory
+	// in the correct order: slot 0=$8C, slot 1=$8D, slot 2=$8E.
+	g.checkACGExit()
 
 	// Door transition cooldown timer
 	if g.doorTimer > 0 {
@@ -346,6 +413,7 @@ func (g *GameEnv) stepDying() {
 
 		if g.lives == 0 {
 			g.state = StateGameOver
+			g.frame = 0
 		} else {
 			g.state = StateDead // brief pause before respawn
 		}
@@ -423,46 +491,118 @@ func (g *GameEnv) stepSpawning() {
 	g.drawHUD()
 }
 
+// stepGameOver shows "GAME OVER" with stats, then returns to menu.
+// Z80 $8C35: clear play area, show "GAME OVER", show stats (time, score, %),
+// long delay (~7 seconds), then jump to menu at $7C29.
+func (g *GameEnv) stepGameOver() {
+	g.frame++
+
+	if g.frame == 1 {
+		// Clear play area
+		g.clearPlayArea()
+		// Z80 $8C35: "GAME OVER" at (64,48) using custom font from $BF4C
+		cs := &data.GenCharset
+		g.buf.DrawStringFrom(64, 48, "GAME OVER", cs)
+		g.buf.FillAttrArea(0, 0, 24, 24, 0x00) // black background
+		g.buf.FillAttrArea(8, 6, 12, 1, 0x47)   // bright white for text
+		// Stats
+		g.drawGameStats()
+	}
+
+	// HUD stays visible
+	g.clearHUDArea()
+	g.drawHUD()
+
+	// After ~7 seconds (350 frames at 50fps), return to menu
+	if g.frame > 350 {
+		g.Reset()
+	}
+}
+
+// stepWin shows congratulations with stats, then returns to menu.
+// Z80 $96EC: show "CONGRATULATIONS" and "YOU HAVE ESCAPED", stats, delay, menu.
+func (g *GameEnv) stepWin() {
+	g.frame++
+
+	if g.frame == 1 {
+		g.clearPlayArea()
+		cs := &data.GenCharset
+		g.buf.DrawStringFrom(40, 32, "CONGRATULATIONS", cs)
+		g.buf.DrawStringFrom(40, 48, "YOU HAVE ESCAPED", cs)
+		g.buf.FillAttrArea(0, 0, 24, 24, 0x00) // black background
+		g.buf.FillAttrArea(5, 4, 16, 1, 0x47)   // bright white for "CONGRATULATIONS" (15 chars from col 5)
+		g.buf.FillAttrArea(5, 6, 16, 1, 0x47)   // bright white for "YOU HAVE ESCAPED" (16 chars from col 5)
+		g.drawGameStats()
+	}
+
+	g.clearHUDArea()
+	g.drawHUD()
+
+	if g.frame > 350 {
+		g.Reset()
+	}
+}
+
+// drawGameStats renders TIME, SCORE, and room visit % on the play area.
+// Z80 game_stats at $9641: prints at rows 8, 10, 12 of play area.
+func (g *GameEnv) drawGameStats() {
+	// Z80 game_stats at $9641: uses custom font at $BF4C for all text.
+	// Labels in bright cyan ($45), values in bright white ($47).
+	cs := &data.GenCharset
+
+	// TIME row (Y=64)
+	g.buf.DrawStringFrom(64, 64, "TIME", cs)
+	g.buf.DrawStringFrom(128, 64, formatClockShort(g.clockM, g.clockS), cs)
+	g.buf.FillAttrArea(8, 8, 6, 1, 0x45)  // TIME label: cyan
+	g.buf.FillAttrArea(16, 8, 6, 1, 0x47) // time value: white
+
+	// SCORE row (Y=80)
+	g.buf.DrawStringFrom(64, 80, "SCORE", cs)
+	g.buf.DrawStringFrom(128, 80, formatBCD(g.score), cs)
+	g.buf.FillAttrArea(8, 10, 6, 1, 0x45)
+	g.buf.FillAttrArea(16, 10, 6, 1, 0x47)
+
+	// % row (Y=96) — Z80 percent_msg at $969F uses "$" character,
+	// which maps to a "%" glyph in the custom font.
+	g.buf.DrawStringFrom(64, 96, "$", cs)
+	g.buf.DrawStringFrom(128, 96, formatBCD(uint32(g.visitPercent)), cs)
+	g.buf.FillAttrArea(8, 12, 6, 1, 0x45)
+	g.buf.FillAttrArea(16, 12, 6, 1, 0x47)
+}
+
 // stepFalling handles the trap door falling tunnel animation.
-// Z80: 128 frames of tunnel effect with flashing black/white every 8 frames.
-// Uses room style 12 (trapdoor tunnel) concentric square graphics.
+// Z80 chk_trap_exit at $9731:
+//   1. Clear screen, draw room 150 lines (12 concentric squares) — STATIC
+//   2. 128-frame loop: inject flash colour at 2 central attr cells,
+//      then spiral-fill attrs from outside inward. Each ring reads its
+//      colour from the cell one-row-up, one-col-right. This propagates
+//      the flash colour outward by one ring per frame, creating expanding
+//      concentric white rings — the falling tunnel effect.
 func (g *GameEnv) stepFalling() {
 	g.frame++
 	g.fallTimer--
 
-	// Clear and draw tunnel effect
+	// Clear pixels each frame.
 	for i := range g.buf.Pixels {
 		g.buf.Pixels[i] = 0
 	}
 
-	// Draw tunnel concentric squares using room style 12
-	style := data.RoomStyles[12]
-	for _, lg := range style.Lines {
-		if len(lg.Dsts) == 0 {
-			continue
-		}
-		srcIdx := int(lg.Src)
-		if srcIdx >= len(style.Points) {
-			continue
-		}
-		src := style.Points[srcIdx]
-		for _, di := range lg.Dsts {
-			dstIdx := int(di)
-			if dstIdx >= len(style.Points) {
-				continue
-			}
-			dst := style.Points[dstIdx]
-			g.buf.DrawLine(int(src.X), int(src.Y), int(dst.X), int(dst.Y))
-		}
+	// The Z80 draws all 12 squares as static pixels, then reveals them
+	// outward via an attr spiral. We approximate this by drawing a moving
+	// window of 2 squares that expands outward over the 128 frames.
+	// 128 frames / 12 squares ≈ 10 frames per square.
+	elapsed := 128 - g.fallTimer // 1→128
+	current := elapsed / 10      // which square (0=innermost → 11=outermost)
+	if current > 11 {
+		current = 11
+	}
+	// Draw current square and the one before it (2 visible at a time)
+	for sq := current; sq >= 0 && sq >= current-1; sq-- {
+		g.drawTrapTunnelSquare(sq)
 	}
 
-	// Flash attributes: bright white every 8 frames, black otherwise
-	// Z80: (frame_counter & $07) == 0 → white, else black
-	attr := byte(0x00) // black
-	if g.fallTimer&0x07 == 0 {
-		attr = 0x47 // bright white
-	}
-	g.buf.FillAttrArea(0, 0, 24, 24, attr)
+	// Keep attrs white so lines are visible
+	g.buf.FillAttrArea(0, 0, 24, 24, 0x47)
 
 	// Keep HUD visible
 	g.clearHUDArea()
@@ -479,6 +619,129 @@ func (g *GameEnv) stepFalling() {
 		g.spawnDelay = 32
 		g.markRoomVisited(g.room)
 		g.state = StatePlaying
+	}
+}
+
+// drawTrapTunnelN draws the first n concentric squares (of 12 total).
+func (g *GameEnv) drawTrapTunnelN(n int) {
+	if n > 12 {
+		n = 12
+	}
+	for sq := 0; sq < n; sq++ {
+		g.drawTrapTunnelSquare(sq)
+	}
+}
+
+// trapTunnelPoints are the 12 concentric squares from Z80 points_trap ($97A9).
+var trapTunnelPoints = [48][2]int{
+	{0x5C, 0x63}, {0x63, 0x63}, {0x63, 0x5C}, {0x5C, 0x5C}, // 0: innermost
+	{0x54, 0x6B}, {0x6B, 0x6B}, {0x6B, 0x54}, {0x54, 0x54}, // 1
+	{0x4C, 0x73}, {0x73, 0x73}, {0x73, 0x4C}, {0x4C, 0x4C}, // 2
+	{0x44, 0x7B}, {0x7B, 0x7B}, {0x7B, 0x44}, {0x44, 0x44}, // 3
+	{0x3C, 0x83}, {0x83, 0x83}, {0x83, 0x3C}, {0x3C, 0x3C}, // 4
+	{0x34, 0x8B}, {0x8B, 0x8B}, {0x8B, 0x34}, {0x34, 0x34}, // 5
+	{0x2C, 0x93}, {0x93, 0x93}, {0x93, 0x2C}, {0x2C, 0x2C}, // 6
+	{0x24, 0x9B}, {0x9B, 0x9B}, {0x9B, 0x24}, {0x24, 0x24}, // 7
+	{0x1C, 0xA3}, {0xA3, 0xA3}, {0xA3, 0x1C}, {0x1C, 0x1C}, // 8
+	{0x14, 0xAB}, {0xAB, 0xAB}, {0xAB, 0x14}, {0x14, 0x14}, // 9
+	{0x0C, 0xB3}, {0xB3, 0xB3}, {0xB3, 0x0C}, {0x0C, 0x0C}, // 10
+	{0x04, 0xBB}, {0xBB, 0xBB}, {0xBB, 0x04}, {0x04, 0x04}, // 11: outermost
+}
+
+// drawTrapTunnelSquare draws a single concentric rectangle by index (0=innermost).
+func (g *GameEnv) drawTrapTunnelSquare(sq int) {
+	if sq < 0 || sq > 11 {
+		return
+	}
+	base := sq * 4
+	p0 := trapTunnelPoints[base+0] // BL
+	p1 := trapTunnelPoints[base+1] // BR
+	p2 := trapTunnelPoints[base+2] // TR
+	p3 := trapTunnelPoints[base+3] // TL
+	g.buf.DrawLine(p0[0], p0[1], p1[0], p1[1]) // bottom
+	g.buf.DrawLine(p0[0], p0[1], p3[0], p3[1]) // left
+	g.buf.DrawLine(p2[0], p2[1], p1[0], p1[1]) // right
+	g.buf.DrawLine(p2[0], p2[1], p3[0], p3[1]) // top
+}
+
+// spiralFillTunnelAttrs replicates Z80 draw_tunnel_attrs at $9774 exactly.
+// Uses a flat 768-byte buffer matching the Z80 attr area at $5800.
+// Operates with the same address arithmetic as the Z80 code.
+func (g *GameEnv) spiralFillTunnelAttrs() {
+	// Map tunnelAttrs [24][24] ↔ flat Z80 attr buffer (32 bytes per row)
+	// Z80 attr offset = row*32 + col. We only use cols 0-23.
+	//
+	// get/set helpers to translate between flat Z80 offset and our grid:
+	get := func(offset int) byte {
+		r := offset / 32
+		c := offset % 32
+		if r >= 0 && r < 24 && c >= 0 && c < 24 {
+			return g.tunnelAttrs[r][c]
+		}
+		return 0
+	}
+	set := func(offset int, v byte) {
+		r := offset / 32
+		c := offset % 32
+		if r >= 0 && r < 24 && c >= 0 && c < 24 {
+			g.tunnelAttrs[r][c] = v
+		}
+	}
+
+	// Z80: BC=$170B, HL=$5AE0, DE=$0020
+	// We use offsets relative to $5800, so HL starts at $2E0
+	hl := 0x2E0 // $5AE0 - $5800
+	de := 0x020 // $0020
+	b := 23     // $17
+	c := 11     // $0B
+
+	for c > 0 {
+		savedHL := hl
+
+		// $977F: HL = HL - DE
+		hl -= de
+		// $9781: inc L (increment low byte only — column +1)
+		hl = (hl & 0xFFE0) | ((hl + 1) & 0x1F)
+		// $9782: A = (HL)
+		a := get(hl)
+		// $9783: restore HL
+		hl = savedHL
+
+		// $9785: horizontal right — write A, inc L, B times
+		for i := 0; i < b; i++ {
+			set(hl, a)
+			hl = (hl & 0xFFE0) | ((hl + 1) & 0x1F) // inc L
+		}
+
+		// $978B: vertical up — write A, HL -= DE, B times
+		for i := 0; i < b; i++ {
+			set(hl, a)
+			hl -= de // sbc hl, de
+		}
+
+		// $9793: horizontal left — write A, dec L, B times
+		for i := 0; i < b; i++ {
+			set(hl, a)
+			hl = (hl & 0xFFE0) | ((hl - 1) & 0x1F) // dec L
+		}
+
+		// $9799: vertical down — write A, HL += DE, B times
+		for i := 0; i < b; i++ {
+			set(hl, a)
+			hl += de // add hl, de
+		}
+
+		// $979D: (HL) = A
+		set(hl, a)
+		// $979F: HL -= DE
+		hl -= de
+		// $97A1: inc L
+		hl = (hl & 0xFFE0) | ((hl + 1) & 0x1F)
+
+		// $97A3-$97A4: B -= 2
+		b -= 2
+		// $97A5: C -= 1
+		c--
 	}
 }
 
@@ -589,6 +852,12 @@ func (g *GameEnv) checkDecoCollision(px, py int) bool {
 			continue
 		}
 
+		// Skip trap doors (types $18/$19) — player walks over them
+		// (fall detection handled separately in checkTrapDoor)
+		if typeID == 0x18 || typeID == 0x19 {
+			continue
+		}
+
 		// Skip wall-mounted items (shields, trophies) — they don't block
 		// These are small items on the outer frame, not floor obstacles
 		if typeID == 0x1B || typeID == 0x1C { // shields
@@ -677,6 +946,52 @@ func (g *GameEnv) randomiseDoorStates() {
 
 // getDoorType returns the runtime entity type for a door.
 // If not in doorTypes map, returns the original type from entity data.
+// permanentlyOpenDoor changes a locked door to type $02 (open) for both
+// linked entities. Z80 set_door_type at $9260: writes to (ix+$00) and
+// the XOR $08 linked entry. The door stays open for the rest of the game.
+func (g *GameEnv) permanentlyOpenDoor(d data.RoomDoor) {
+	entities := data.GenRoomEntityData[int(g.room)]
+	for ei, pair := range entities {
+		for side := 0; side < 2; side++ {
+			var e [8]byte
+			if side == 0 {
+				copy(e[:], pair[0:8])
+			} else {
+				copy(e[:], pair[8:16])
+			}
+			if e[1] != g.room {
+				continue
+			}
+			if int(e[3]) != int(d.X) || int(e[4]) != int(d.Y) {
+				continue
+			}
+			if e[0] < 0x08 || e[0] > 0x0F {
+				continue
+			}
+			// Set this door to open ($02) in the runtime type map
+			key := uint32(g.room)<<16 | uint32(ei)
+			g.doorTypes[key] = 0x02
+			// Also set the linked door (other room side) to open
+			otherRoom := pair[9]
+			if side == 1 {
+				otherRoom = pair[1]
+			}
+			// Find the entity index in the other room
+			otherEntities := data.GenRoomEntityData[int(otherRoom)]
+			for oei, opair := range otherEntities {
+				if opair[1] == otherRoom || opair[9] == otherRoom {
+					// Check if this is the same pair
+					if opair == pair {
+						oKey := uint32(otherRoom)<<16 | uint32(oei)
+						g.doorTypes[oKey] = 0x02
+					}
+				}
+			}
+			return
+		}
+	}
+}
+
 func (g *GameEnv) getDoorType(room byte, entityIdx int) byte {
 	key := uint32(room)<<16 | uint32(entityIdx)
 	if rt, ok := g.doorTypes[key]; ok {
@@ -895,7 +1210,7 @@ func (g *GameEnv) updateBosses() {
 		case entity.BossFrankenstein:
 			// Defeated instantly if player has spanner
 			for _, slot := range g.inventory {
-				if slot.Occupied && slot.Name == "SPANNR" {
+				if slot.Occupied && slot.Name == "SPANNER" {
 					e.Active = false
 					g.score += 1000
 					g.hudDirty = true
@@ -1070,7 +1385,7 @@ func (g *GameEnv) updateWeapon() {
 		return
 	}
 
-	// Check hit on creatures
+	// Check hit on creatures (NOT bosses — bosses are immune to weapons)
 	g.entities.ForEachInRoom(g.room, func(e *entity.Entity) {
 		if e.Type != entity.TypeCreature {
 			return
@@ -1105,12 +1420,13 @@ func (g *GameEnv) spawnItems() {
 			break
 		}
 		e.Type = entity.TypeKey
-		e.Room = acgRoomTable[acgSet][0]
-		e.X = int(acgRoomTable[acgSet][1])
-		e.Y = int(acgRoomTable[acgSet][2])
+		// Z80 place_key_pieces at $94B6: each piece goes to a DIFFERENT
+		// room from the 3-byte set. Piece 0 → set[0], 1 → set[1], 2 → set[2].
+		e.Room = acgRoomTable[acgSet][i]
+		e.X = int(k[3])
+		e.Y = int(k[4])
 		e.Attr = k[5]
 		e.Graphic = k[0]
-		_ = i
 	}
 
 	// --- Coloured keys: each randomised to one of 8 rooms ---
@@ -1243,16 +1559,65 @@ func (g *GameEnv) checkFoodPickup() {
 			return
 		}
 		// Auto-consume: +$40 (64) energy, cap at $F0 (240)
-		g.energy += 64
-		if g.energy > InitialEnergy {
-			g.energy = InitialEnergy
+		// Z80 $8C7D: ADD A,C / JR C,$8C84 — checks carry before compare.
+		// Must check overflow before the byte wraps.
+		newEnergy := uint16(g.energy) + 64
+		if newEnergy > uint16(InitialEnergy) {
+			newEnergy = uint16(InitialEnergy)
+		}
+		g.energy = byte(newEnergy)
+		e.Active = false
+		g.hudDirty = true
+	})
+}
+
+// checkColourKeyPickup auto-picks up colour keys (graphic $81) on contact.
+// Colour keys (red, green, cyan, yellow) are collected by walking over them.
+func (g *GameEnv) checkColourKeyPickup() {
+	px := int(g.playerX)
+	py := int(g.playerY)
+	const touchDist = 12
+
+	g.entities.ForEachInRoom(g.room, func(e *entity.Entity) {
+		if e.Type != entity.TypeKey || e.Graphic != 0x81 {
+			return
+		}
+		if abs(px-e.X) >= touchDist || abs(py-e.Y) >= touchDist {
+			return
+		}
+		slot := g.findFreeSlot()
+		if slot < 0 {
+			g.dropItem()
+			slot = g.findFreeSlot()
+			if slot < 0 {
+				return
+			}
+		}
+		// Colour key name from attr: $42=red, $44=green, $45=cyan, $46=yellow
+		name := "KEY"
+		switch e.Attr {
+		case 0x42:
+			name = "RED"
+		case 0x44:
+			name = "GREEN"
+		case 0x45:
+			name = "CYAN"
+		case 0x46:
+			name = "YELLOW"
+		}
+		g.inventory[slot] = InvSlot{
+			Occupied: true,
+			ItemType: e.Graphic,
+			Attr:     e.Attr,
+			Name:     name,
 		}
 		e.Active = false
 		g.hudDirty = true
 	})
 }
 
-// checkPickup handles key/collectible pickup on Enter key press.
+// checkPickup handles ACG key/collectible pickup on Enter key press.
+// Z80 h_pickup_item at $92F5: checks pickup key ($5E20), then touch ($90FB).
 func (g *GameEnv) checkPickup(act action.Action) {
 	if act&action.Pickup == 0 {
 		return
@@ -1266,12 +1631,34 @@ func (g *GameEnv) checkPickup(act action.Action) {
 		if e.Type != entity.TypeKey && e.Type != entity.TypeCollectible {
 			return
 		}
+		// Skip colour keys — handled by checkColourKeyPickup (auto-pickup)
+		if e.Type == entity.TypeKey && e.Graphic == 0x81 {
+			return
+		}
 		if abs(px-e.X) >= pickupDist || abs(py-e.Y) >= pickupDist {
 			return
 		}
 
 		switch e.Type {
 		case entity.TypeCollectible:
+			// Collectibles with game effects (crucifix, spanner, leaf) go into
+			// inventory. Others just score points.
+			if collectibleNeedsInventory(e.Graphic) {
+				slot := g.findFreeSlot()
+				if slot < 0 {
+					g.dropItem()
+					slot = g.findFreeSlot()
+					if slot < 0 {
+						return
+					}
+				}
+				g.inventory[slot] = InvSlot{
+					Occupied: true,
+					ItemType: e.Graphic,
+					Attr:     e.Attr,
+					Name:     collectibleName(e.Graphic),
+				}
+			}
 			g.score += 100
 			e.Active = false
 
@@ -1289,6 +1676,7 @@ func (g *GameEnv) checkPickup(act action.Action) {
 			g.inventory[slot] = InvSlot{
 				Occupied: true,
 				ItemType: e.Graphic,
+				Attr:     e.Attr,
 				Name:     keyName(e.Graphic),
 			}
 			e.Active = false
@@ -1323,21 +1711,7 @@ func (g *GameEnv) dropItem() {
 		e.X = int(g.playerX)
 		e.Y = int(g.playerY)
 		e.Graphic = dropped.ItemType
-		// Set attr based on key name
-		switch dropped.Name {
-		case "RED":
-			e.Attr = 0x42
-		case "GREEN":
-			e.Attr = 0x44
-		case "CYAN":
-			e.Attr = 0x45
-		case "YELLOW":
-			e.Attr = 0x46
-		case "ACG-1", "ACG-2", "ACG-3":
-			e.Attr = 0x46
-		default:
-			e.Attr = 0x47
-		}
+		e.Attr = dropped.Attr
 	}
 }
 
@@ -1369,6 +1743,30 @@ func keyName(graphic byte) string {
 	default:
 		return "KEY"
 	}
+}
+
+// collectibleNeedsInventory returns true for collectibles that have gameplay
+// effects when carried (crucifix repels Dracula, spanner kills Frankenstein,
+// leaf attracts Mummy).
+func collectibleNeedsInventory(graphic byte) bool {
+	switch graphic {
+	case 0x8A, 0x8B, 0x80: // crucifix, spanner, leaf
+		return true
+	}
+	return false
+}
+
+// collectibleName returns the inventory name for special collectibles.
+func collectibleName(graphic byte) string {
+	switch graphic {
+	case 0x8A:
+		return "CRUCIX"
+	case 0x8B:
+		return "SPANNER"
+	case 0x80:
+		return "LEAF"
+	}
+	return "ITEM"
 }
 
 // checkSecretPassage checks if the player is overlapping a character-specific
@@ -1578,22 +1976,54 @@ func (g *GameEnv) markRoomVisited(room byte) {
 	g.visitPercent = byte(visited * 100 / data.NumRooms)
 }
 
-func (g *GameEnv) hasACGKeys() bool {
-	has := [3]bool{}
-	for _, slot := range g.inventory {
-		if !slot.Occupied {
-			continue
-		}
-		switch slot.ItemType {
-		case ItemACGKey1:
-			has[0] = true
-		case ItemACGKey2:
-			has[1] = true
-		case ItemACGKey3:
-			has[2] = true
+// hasACGKeysInOrder checks if all 3 ACG key pieces are in the correct
+// inventory slot order. Z80 h_acg_exit at $961B:
+//   slot 0 graphic = $8C (ACG key part 1)
+//   slot 1 graphic = $8D (ACG key part 2)
+//   slot 2 graphic = $8E (ACG key part 3)
+func (g *GameEnv) hasACGKeysInOrder() bool {
+	return g.inventory[0].Occupied && g.inventory[0].ItemType == ItemACGKey1 &&
+		g.inventory[1].Occupied && g.inventory[1].ItemType == ItemACGKey2 &&
+		g.inventory[2].Occupied && g.inventory[2].ItemType == ItemACGKey3
+}
+
+// checkACGExit checks if the player is touching the ACG exit decoration
+// (type $24) in the current room, and if so, whether they have all 3 ACG
+// key pieces in the correct inventory order.
+func (g *GameEnv) checkACGExit() {
+	px := int(g.playerX)
+	py := int(g.playerY)
+	const touchDist = 12
+
+	entities := data.GenRoomEntityData[int(g.room)]
+	for _, pair := range entities {
+		for side := 0; side < 2; side++ {
+			var e [8]byte
+			if side == 0 {
+				copy(e[:], pair[0:8])
+			} else {
+				copy(e[:], pair[8:16])
+			}
+			if e[1] != g.room {
+				continue
+			}
+			if e[0] != 0x24 { // ACG exit decoration type
+				continue
+			}
+			ex := int(e[3])
+			ey := int(e[4])
+			if abs(px-ex) >= touchDist || abs(py-ey) >= touchDist {
+				continue
+			}
+			// Player is touching the ACG exit — check keys in order
+			if g.hasACGKeysInOrder() {
+				g.state = StateWin
+				g.frame = 0
+				g.score += 5000
+				return
+			}
 		}
 	}
-	return has[0] && has[1] && has[2]
 }
 
 // ---------- DOORS ----------
@@ -1656,26 +2086,48 @@ func (g *GameEnv) checkDoorExit(dx, dy, rw, rh int) {
 			}
 		}
 
-		// Locked door check: types $08-$0F require matching colour key
-		// Z80 check_key_colour at $9222: door type & $03 = colour index
-		// Key attrs table at $925C: [$42=red, $44=green, $45=cyan, $46=yellow]
+		// Locked door check: types $08-$0F require matching colour key.
+		// But if the door has been permanently opened (runtime type $02),
+		// skip the key check — it's already unlocked.
 		if d.Type >= 0x08 && d.Type <= 0x0F {
-			// Z80 key colour table at $925C: [red, green, cyan, yellow]
-			keyNames := [4]string{"RED", "GREEN", "CYAN", "YELLOW"}
-			requiredKey := keyNames[d.Type&0x03]
-			keySlot := -1
-			for si, slot := range g.inventory {
-				if slot.Occupied && slot.Name == requiredKey {
-					keySlot = si
+			// Check if already permanently opened
+			alreadyOpen := false
+			entities := data.GenRoomEntityData[int(g.room)]
+			for ei, pair := range entities {
+				var e [8]byte
+				if pair[1] == g.room {
+					copy(e[:], pair[0:8])
+				} else if pair[9] == g.room {
+					copy(e[:], pair[8:16])
+				} else {
+					continue
+				}
+				if e[0] >= 0x08 && e[0] <= 0x0F &&
+					int(e[3]) == int(d.X) && int(e[4]) == int(d.Y) {
+					rt := g.getDoorType(g.room, ei)
+					if rt == 0x02 {
+						alreadyOpen = true
+					}
 					break
 				}
 			}
-			if keySlot < 0 {
-				continue // locked — no matching key
+			if !alreadyOpen {
+				// Z80 check_key_colour at $9222: door type & $03 = colour index.
+				keyAttrs := [4]byte{0x42, 0x44, 0x45, 0x46}
+				requiredAttr := keyAttrs[d.Type&0x03]
+				found := false
+				for _, slot := range g.inventory {
+					if slot.Occupied && slot.ItemType == 0x81 && slot.Attr == requiredAttr {
+						found = true
+						break
+					}
+				}
+				if !found {
+					continue // locked — no matching key
+				}
+				// Z80 h_door_locked at $9244: permanently unlock
+				g.permanentlyOpenDoor(d)
 			}
-			// Consume the key
-			g.inventory[keySlot] = InvSlot{}
-			g.hudDirty = true
 		}
 
 		destRA := data.RoomAttrs[d.DestRoom]
@@ -1768,7 +2220,7 @@ func (g *GameEnv) paintEntityAttr(x, y, widthCells, heightPx int, attr byte) {
 		for c := 0; c < actualWidth; c++ {
 			cellCol := startCol + c
 			cellRow := startRow - r
-			if cellCol >= 0 && cellCol < 24 && cellRow >= 0 && cellRow < 24 {
+			if cellCol >= 0 && cellCol < 32 && cellRow >= 0 && cellRow < 24 {
 				g.buf.Attrs[cellRow*32+cellCol] = attr
 			}
 		}
@@ -1938,17 +2390,25 @@ func (g *GameEnv) drawDecorations() {
 		}
 
 		// Door state rendering: check runtime type for managed doors.
-		// Open doors ($21/$23) use gfxIdx 1 (horseshoe arch).
-		// Closed doors ($20/$22) use gfxIdx 31 (solid door).
-		if typeID == 0x01 || typeID == 0x02 {
-			rt := g.getDoorType(g.room, ei)
-			if rt >= 0x20 && rt <= 0x23 {
-				if rt&0x01 == 0 {
-					// Closed: use door_shut sprite (gfxIdx 31)
-					gfxIdx = 31
+		// The runtime doorTypes map overrides the original entity type.
+		// Z80 set_door_type at $9260 modifies entity byte 0 directly.
+		rt := g.getDoorType(g.room, ei)
+		if rt != 0 {
+			// Runtime type overrides original — use it for rendering.
+			// Open doors ($02, $21, $23) use horseshoe arch sprite.
+			// Closed doors ($20, $22) use solid door sprite.
+			if rt == 0x02 || (rt >= 0x20 && rt&0x01 != 0) {
+				// Open: use horseshoe arch (gfxIdx based on original type)
+				// For locked doors opened permanently, use type $02's gfx
+				if typeID >= 0x08 && typeID <= 0x0F {
+					gfxIdx = 1 // horseshoe arch (type $02 - 1)
 				}
-				// Open: keep original gfxIdx (horseshoe arch)
+			} else if rt >= 0x20 && rt&0x01 == 0 {
+				// Closed: use door_shut sprite
+				gfxIdx = 31
 			}
+		} else if typeID == 0x01 || typeID == 0x02 {
+			// Unmanaged regular doors default to open
 		}
 
 		// Skip chicken sprites (gfx types 18/19 = HUD energy bar, not room decor)
@@ -2416,21 +2876,33 @@ func (g *GameEnv) drawHUD() {
 	g.buf.FillAttrArea(25, 11, 6, 4, 0x46) // chicken: yellow
 	g.buf.FillAttrArea(25, 15, 6, 3, 0x47) // lives: white
 
-	// Time digits (row 8, Y=64)
-	g.buf.DrawString(200, 64, formatClockShort(g.clockM, g.clockS))
+	// Time digits (row 8, Y=64) — custom game font from $BF4C
+	cs := &data.GenCharset
+	g.buf.DrawStringFrom(200, 64, formatClockShort(g.clockM, g.clockS), cs)
 
 	// Score digits (row 10, Y=80)
-	g.buf.DrawString(200, 80, formatBCD(g.score))
+	g.buf.DrawStringFrom(200, 80, formatBCD(g.score), cs)
 
-	// Chicken energy bar (rows 11-14, Y=88-119)
+	// Chicken energy bar (rows 11-14, Y=90-119, 30 pixel rows).
+	// Z80 $8B8A: draws ChickenEmpty (bones) for depleted portion at top,
+	// then ChickenFull (meat) for remaining health at bottom.
+	// Sprite data stored bottom-to-top: array[0] = bottom row of sprite.
 	chickenRows := int(g.energy) * 30 / int(InitialEnergy)
 	if chickenRows > 30 {
 		chickenRows = 30
 	}
+	emptyRows := 30 - chickenRows
+	// Draw bones (top of chicken area): need TOP rows of ChickenEmpty,
+	// which are at the END of the array (bottom-to-top storage).
+	if emptyRows > 0 {
+		g.buf.DrawSpriteWideOR(200, 89+emptyRows, 6, emptyRows,
+			data.ChickenEmpty[(30-emptyRows)*6:])
+	}
+	// Draw meat (bottom of chicken area): need BOTTOM rows of ChickenFull,
+	// which are at the START of the array (bottom-to-top storage).
 	if chickenRows > 0 {
-		startRow := 30 - chickenRows
 		g.buf.DrawSpriteWideOR(200, 119, 6, chickenRows,
-			data.ChickenFull[startRow*6:])
+			data.ChickenFull[:chickenRows*6])
 	}
 
 	// Lives (rows 15-17, Y=120-143) — up to 3 character sprites
@@ -2441,12 +2913,27 @@ func (g *GameEnv) drawHUD() {
 		g.buf.DrawSpriteXOR(lx, 139, sprites[data.DirLeft][0])
 	}
 
-	// Inventory slots (rows 5-6, Y=40-55)
-	g.buf.FillAttrArea(25, 5, 6, 2, 0x47)
+	// Inventory slots (rows 3-5, Y=24-44)
+	// Z80 draw_inventory at $A13B: first item at (200, 44), +16px each.
+	// $A185 clears 2×20 pixel area before drawing each item.
 	for i, slot := range g.inventory {
 		ix := 200 + i*16
-		if slot.Occupied {
-			g.buf.DrawString(ix, 44, slot.Name[:1])
+		if !slot.Occupied {
+			continue
+		}
+		flatIdx := int(slot.ItemType) - 1
+		group := flatIdx / 4
+		frame := flatIdx % 4
+		if group >= 0 && group < len(data.GenSpriteTable) {
+			addr := data.GenSpriteTable[group][frame]
+			if spr := data.GenMenuIcons[addr]; spr != nil {
+				g.buf.DrawSpriteXOR(ix, 44, spr) // Y=44 from Z80 $2CC8
+				attr := slot.Attr
+				if attr == 0 {
+					attr = 0x47 // default bright white
+				}
+				g.paintEntityAttr(ix, 44, 2, int(spr[0]), attr)
+			}
 		}
 	}
 }
@@ -2499,8 +2986,10 @@ func formatBCD(val uint32) string {
 }
 
 func formatClockShort(m, s byte) string {
+	// '#' maps to a colon glyph in the custom game font (GenCharset[3]).
+	// The Z80 TIME label uses '#' as the separator character.
 	return string([]byte{
-		'0' + m/10, '0' + m%10, ':',
+		'0' + m/10, '0' + m%10, '#',
 		'0' + s/10, '0' + s%10,
 	})
 }

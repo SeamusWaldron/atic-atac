@@ -30,10 +30,14 @@ type Game struct {
 	menu   MenuState
 
 	// Debounce for special keys
-	nWasPressed    bool
-	pWasPressed    bool
-	starWasPressed bool
-	lastKeys       [3]bool
+	nWasPressed     bool
+	pWasPressed     bool
+	starWasPressed  bool
+	keyJumpPressed  bool
+	keyJumpIdx      int
+	pausePressed    bool
+	paused          bool
+	lastKeys        [3]bool
 }
 
 // New creates a new Ebitengine game.
@@ -60,14 +64,27 @@ func (g *Game) Update() error {
 	if g.eng.State() == engine.StateMenu {
 		if UpdateMenu(&g.menu, g.eng) {
 			g.eng.StartGame()
+			g.keyJumpIdx = 0
 		}
 		DrawMenu(g.eng.Buffer(), &g.menu)
 		g.result = g.eng.Step(0) // get buffer without advancing game
 		return nil
 	}
 
-	// Room browsing: F2 = next, F1 = previous (debug)
-	nPressed := ebiten.IsKeyPressed(ebiten.KeyF2)
+	shift := ebiten.IsKeyPressed(ebiten.KeyShift)
+
+	// Shift+9: toggle pause
+	pauseNow := shift && ebiten.IsKeyPressed(ebiten.KeyDigit9)
+	if pauseNow && !g.pausePressed {
+		g.paused = !g.paused
+	}
+	g.pausePressed = pauseNow
+	if g.paused {
+		return nil
+	}
+
+	// Room browsing: Shift+2 = next, Shift+1 = previous (debug)
+	nPressed := shift && ebiten.IsKeyPressed(ebiten.KeyDigit2)
 	if nPressed && !g.nWasPressed {
 		g.room++
 		if int(g.room) >= data.NumRooms {
@@ -77,7 +94,7 @@ func (g *Game) Update() error {
 	}
 	g.nWasPressed = nPressed
 
-	pPressed := ebiten.IsKeyPressed(ebiten.KeyF1)
+	pPressed := shift && ebiten.IsKeyPressed(ebiten.KeyDigit1)
 	if pPressed && !g.pWasPressed {
 		if g.room == 0 {
 			g.room = byte(data.NumRooms - 1)
@@ -87,6 +104,50 @@ func (g *Game) Update() error {
 		g.eng.ChangeRoom(g.room)
 	}
 	g.pWasPressed = pPressed
+
+	// Shift+0: jump to next key room (debug) — starts with yellow key
+	kjPressed := shift && ebiten.IsKeyPressed(ebiten.KeyDigit0)
+	if kjPressed && !g.keyJumpPressed {
+		info := g.eng.KeyInfo()
+		// Sort: colour keys first (YELLOW, RED, GREEN, CYAN), then ACG
+		colourOrder := []string{"YELLOW", "RED", "GREEN", "CYAN"}
+		var sorted []int
+		for _, name := range colourOrder {
+			for i, s := range info {
+				if len(s) >= len(name) && s[:len(name)] == name {
+					sorted = append(sorted, i)
+				}
+			}
+		}
+		for i := range info {
+			found := false
+			for _, j := range sorted {
+				if i == j {
+					found = true
+					break
+				}
+			}
+			if !found {
+				sorted = append(sorted, i)
+			}
+		}
+		rooms := g.eng.KeyRooms()
+		if len(sorted) > 0 {
+			if g.keyJumpIdx == 0 {
+				fmt.Println("=== All keys ===")
+				for _, idx := range sorted {
+					fmt.Println(" ", info[idx])
+				}
+			}
+			g.keyJumpIdx = g.keyJumpIdx % len(sorted)
+			ri := sorted[g.keyJumpIdx]
+			g.room = rooms[ri]
+			g.eng.ChangeRoom(g.room)
+			fmt.Printf("→ %s\n", info[ri])
+			g.keyJumpIdx++
+		}
+	}
+	g.keyJumpPressed = kjPressed
 
 	// Character select: 1=Wizard, 2=Knight, 3=Serf
 	charKeys := [3]ebiten.Key{ebiten.Key1, ebiten.Key2, ebiten.Key3}
@@ -135,6 +196,12 @@ func (g *Game) saveScreenshot() {
 		state = "gameover"
 	case engine.StateWin:
 		state = "win"
+	case engine.StateFalling:
+		state = "falling"
+	case engine.StateDying:
+		state = "dying"
+	case engine.StateSpawning:
+		state = "spawning"
 	}
 
 	charNames := [3]string{"wizard", "knight", "serf"}
