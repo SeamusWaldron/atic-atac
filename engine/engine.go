@@ -102,7 +102,8 @@ type GameEnv struct {
 	// Bit 0 = open(1)/closed(0). XOR $01 toggles state.
 	doorTypes      map[uint32]byte
 	doorCycleTimer int
-	doorCycleIdx   int // round-robin index for which door to toggle next
+	doorCycleIdx   int  // round-robin index for which door to toggle next
+	mummyRoom      byte // Mummy spawns in same room as red key (Z80 $98EF)
 
 	// Rendering
 	roomDrawn bool
@@ -118,6 +119,7 @@ func New() *GameEnv {
 	g := &GameEnv{
 		roomDoors: data.BuildRoomDoors(),
 		entities:  entity.NewPool(),
+		character: data.Knight,
 		rand:      uint16(time.Now().UnixNano() & 0xFFFF),
 	}
 	g.Reset()
@@ -127,7 +129,8 @@ func New() *GameEnv {
 // Reset resets the game to initial state.
 func (g *GameEnv) Reset() {
 	g.state = StateMenu
-	g.character = data.Knight
+	// Don't reset g.character here — SetCharacter sets it before calling Reset.
+	// Initial creation sets it in New().
 	g.lives = InitialLives
 	g.energy = InitialEnergy
 	g.score = 0
@@ -858,6 +861,15 @@ func (g *GameEnv) checkDecoCollision(px, py int) bool {
 			continue
 		}
 
+		// Skip secret passages for the matching character class.
+		// Z80: h_clock($942F)/h_bookcase($9428)/h_barrel($9421) check
+		// player graphic base; matching character passes through.
+		if (typeID == 0x10 && g.character == data.Knight) ||
+			(typeID == 0x17 && g.character == data.Wizard) ||
+			(typeID == 0x1A && g.character == data.Serf) {
+			continue
+		}
+
 		// Skip wall-mounted items (shields, trophies) — they don't block
 		// These are small items on the outer frame, not floor obstacles
 		if typeID == 0x1B || typeID == 0x1C { // shields
@@ -1435,21 +1447,34 @@ func (g *GameEnv) spawnItems() {
 	redRooms := [8]byte{0x17, 0x13, 0x09, 0x0D, 0x89, 0x87, 0x80, 0x85}
 	cyanRooms := [8]byte{0x53, 0x8F, 0x41, 0x94, 0x33, 0x91, 0x39, 0x4C}
 
-	colourKeys := []struct {
-		init  data.EntityInit
-		rooms *[8]byte
+	// Z80 set_key_positions at $98D2: each key uses an independent random
+	// index into its room table. Mummy room = red key room ($98EF).
+	greenIdx := int(g.nextRand()) & 0x07
+	redIdx := int(g.nextRand()) & 0x07
+	cyanIdx := int(g.nextRand()) & 0x07
+
+	greenRoom := greenRooms[greenIdx]
+	redRoom := redRooms[redIdx]
+	cyanRoom := cyanRooms[cyanIdx]
+
+	// Save red key room for Mummy placement
+	g.mummyRoom = redRoom
+
+	colourKeySpawns := []struct {
+		init data.EntityInit
+		room byte
 	}{
-		{data.GreenKeyInit, &greenRooms},
-		{data.RedKeyInit, &redRooms},
-		{data.CyanKeyInit, &cyanRooms},
+		{data.GreenKeyInit, greenRoom},
+		{data.RedKeyInit, redRoom},
+		{data.CyanKeyInit, cyanRoom},
 	}
-	for _, ck := range colourKeys {
+	for _, ck := range colourKeySpawns {
 		e := g.entities.Spawn()
 		if e == nil {
 			break
 		}
 		e.Type = entity.TypeKey
-		e.Room = ck.rooms[int(g.nextRand())&0x07]
+		e.Room = ck.room
 		e.X = int(ck.init[3])
 		e.Y = int(ck.init[4])
 		e.Attr = ck.init[5]
@@ -1523,7 +1548,7 @@ func (g *GameEnv) spawnItems() {
 		x, y    byte
 		attr    byte
 	}{
-		{entity.BossMummy, 0x70, 0x17, 0x50, 0x50, 0x47},
+		{entity.BossMummy, 0x70, g.mummyRoom, 0x50, 0x50, 0x47},
 		{entity.BossDracula, 0x7C, 0x6D, 0x50, 0x50, 0x44},
 		{entity.BossDevil, 0x78, 0x43, 0x50, 0x50, 0x43},
 		{entity.BossFrankenstein, 0x74, 0x55, 0x50, 0x50, 0x42},
@@ -1774,7 +1799,7 @@ func collectibleName(graphic byte) string {
 // Z80: h_clock ($942F) = Knight, h_bookcase ($9428) = Wizard, h_barrel ($9421) = Serf.
 func (g *GameEnv) checkSecretPassage() {
 	if g.doorTimer > 0 {
-		return // cooldown from recent door/passage transition
+		return
 	}
 
 	// Map character class to passage entity type
@@ -1783,27 +1808,22 @@ func (g *GameEnv) checkSecretPassage() {
 	case data.Knight:
 		passageType = 0x10 // clock
 	case data.Wizard:
-		passageType = 0x17 // bookcase — wait, need to verify
+		passageType = 0x17 // bookcase
 	case data.Serf:
-		passageType = 0x1A // barrel — need to verify
+		passageType = 0x1A // barrel
 	default:
 		return
 	}
-	// Z80 handler_table2: type $10 entry 1 = $942F (clock/knight)
-	// Type $14 entry 1 = $9428... actually let me use the actual types
-	// from the handler table analysis:
-	// h_barrel at $9421 for type $1A (handler_table2 row $18, entry 2)
-	// h_bookcase at $9428 for type $17 (handler_table2 row $14, entry 3)
-	// h_clock at $942F for type $10 (handler_table2 row $10, entry 0)
-	// These types need to be checked against the entity data in the room.
 
 	px := int(g.playerX)
 	py := int(g.playerY)
-	const passageDist = 12
+	ra := data.RoomAttrs[g.room]
+	style := data.RoomStyles[ra.Style]
+	rw := int(style.Width)
+	rh := int(style.Height)
 
 	entities := data.GenRoomEntityData[int(g.room)]
 	for _, pair := range entities {
-		// Check both sides of the pair for matching passage type in current room
 		for side := 0; side < 2; side++ {
 			var e [8]byte
 			if side == 0 {
@@ -1818,14 +1838,37 @@ func (g *GameEnv) checkSecretPassage() {
 				continue
 			}
 
-			// Check proximity
 			ex := int(e[3])
 			ey := int(e[4])
-			if abs(px-ex) >= passageDist || abs(py-ey) >= passageDist {
+
+			// Use same wall-edge detection as doors. Z80 h_clock/h_bookcase/
+			// h_barrel call $91F2 (door exit handler) which uses $90CC
+			// (check_exit) — player must be at wall edge aligned with passage.
+			const align = 24
+			onTop := ey < roomCentreY-rh
+			onBottom := ey > roomCentreY+rh
+			onLeft := ex < roomCentreX-rw
+			onRight := ex > roomCentreX+rw
+
+			matched := false
+			if onTop && py <= roomCentreY-rh+4 {
+				matched = abs(px-ex) < align
+			} else if onBottom && py >= roomCentreY+rh-4 {
+				matched = abs(px-ex) < align
+			} else if onLeft && px <= roomCentreX-rw+4 {
+				matched = abs(py-ey) < align
+			} else if onRight && px >= roomCentreX+rw-4 {
+				matched = abs(py-ey) < align
+			} else {
+				// Interior passage — use proximity
+				matched = abs(px-ex) < 16 && abs(py-ey) < 16
+			}
+
+			if !matched {
 				continue
 			}
 
-			// Found matching passage — get destination from the other side
+			// Get destination from the other side
 			var dest [8]byte
 			if side == 0 {
 				copy(dest[:], pair[8:16])
@@ -2733,21 +2776,30 @@ func (g *GameEnv) drawWeapon() {
 		}
 
 	case data.Serf:
-		// Sword: 8 directional frames based on velocity
-		dir := byte(0)
+		// Sword: 8 directional frames. Z80 set_sword_dir at $82C3:
+		// 0=down, 1=down-right, 2=right, 3=up-left, 4=up,
+		// 5=up-right, 6=left, 7=down-left
+		dir := byte(0) // default: down
 		if g.weaponDY < 0 {
-			dir = 2 // up
+			dir = 4 // up
 		} else if g.weaponDY > 0 {
-			dir = 6 // down
-		}
-		if g.weaponDX > 0 {
-			dir++ // right
-		} else if g.weaponDX < 0 {
-			if dir == 0 {
-				dir = 7
-			} else {
-				dir--
+			dir = 0 // down
+		} else {
+			// Y=0: pure horizontal
+			if g.weaponDX > 0 {
+				dir = 2 // right
+			} else if g.weaponDX < 0 {
+				dir = 6 // left
 			}
+			graphicID = 0x38 + dir
+			weaponAttr = 0x46
+			break
+		}
+		// Add X component for diagonals
+		if g.weaponDX > 0 {
+			dir++ // right component
+		} else if g.weaponDX < 0 {
+			dir-- // left component (wraps via &7)
 		}
 		graphicID = 0x38 + (dir & 0x07)
 		weaponAttr = 0x46 // bright yellow

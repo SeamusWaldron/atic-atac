@@ -52,17 +52,19 @@ func DrawMenu(buf *screen.Buffer, ms *MenuState) {
 		y := menuYPositions[i]
 		attr := menuAttrs[i]
 
-		// Flash the selected character option (4=Knight, 5=Wizard, 6=Serf)
-		if i >= 3 && i <= 5 && i-3 == ms.character {
-			if (ms.frame/16)%2 == 0 {
-				attr |= 0x80 // set FLASH bit
+		// Z80 set_menu_attrs at $7C90: selected option gets FLASH on,
+		// non-selected options get FLASH cleared. Base attrs $C5 have
+		// FLASH pre-set so we must explicitly clear for non-selected.
+		if i >= 3 && i <= 5 {
+			if i-3 == ms.character {
+				attr |= 0x80 // FLASH on for selected
+			} else {
+				attr &^= 0x80 // FLASH off for non-selected
 			}
 		}
-		// Flash the selected input option (just flash option 1=keyboard by default)
+		// Input option 1 (keyboard) always selected
 		if i == 0 {
-			if (ms.frame/16)%2 == 0 {
-				attr |= 0x80
-			}
+			attr |= 0x80
 		}
 
 		// Set attribute only for the text cells (starting at menuTextX),
@@ -177,18 +179,18 @@ func UpdateMenu(ms *MenuState, eng *engine.GameEnv) bool {
 	ms.frame++
 
 	// Character select: 4=Knight, 5=Wizard, 6=Serf
-	if ebiten.IsKeyPressed(ebiten.Key4) {
+	if ebiten.IsKeyPressed(ebiten.KeyDigit4) {
 		ms.character = 0
 	}
-	if ebiten.IsKeyPressed(ebiten.Key5) {
+	if ebiten.IsKeyPressed(ebiten.KeyDigit5) {
 		ms.character = 1
 	}
-	if ebiten.IsKeyPressed(ebiten.Key6) {
+	if ebiten.IsKeyPressed(ebiten.KeyDigit6) {
 		ms.character = 2
 	}
 
 	// Start game
-	if ebiten.IsKeyPressed(ebiten.Key0) {
+	if ebiten.IsKeyPressed(ebiten.KeyDigit0) {
 		charClasses := [3]data.CharacterClass{data.Knight, data.Wizard, data.Serf}
 		eng.SetCharacter(charClasses[ms.character])
 		return true

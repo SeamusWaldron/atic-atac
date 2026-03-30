@@ -35,9 +35,11 @@ type Game struct {
 	starWasPressed  bool
 	keyJumpPressed  bool
 	keyJumpIdx      int
-	pausePressed    bool
-	paused          bool
-	lastKeys        [3]bool
+	pausePressed       bool
+	paused             bool
+	lastPassagePressed bool
+	passageJumpIdx     int
+	lastKeys           [3]bool
 }
 
 // New creates a new Ebitengine game.
@@ -149,15 +151,70 @@ func (g *Game) Update() error {
 	}
 	g.keyJumpPressed = kjPressed
 
-	// Character select: 1=Wizard, 2=Knight, 3=Serf
-	charKeys := [3]ebiten.Key{ebiten.Key1, ebiten.Key2, ebiten.Key3}
-	charClasses := [3]data.CharacterClass{data.Wizard, data.Knight, data.Serf}
-	for i, k := range charKeys {
-		pressed := ebiten.IsKeyPressed(k)
-		if pressed && !g.lastKeys[i] {
-			g.eng.SetCharacter(charClasses[i])
+	// Shift+3: debug — cycle through rooms with secret passages for current character
+	s3Pressed := shift && ebiten.IsKeyPressed(ebiten.KeyDigit3)
+	if s3Pressed && !g.lastPassagePressed {
+		passageType := byte(0)
+		passageName := ""
+		switch g.eng.Character() {
+		case data.Knight:
+			passageType = 0x10
+			passageName = "clock"
+		case data.Wizard:
+			passageType = 0x17
+			passageName = "bookcase"
+		case data.Serf:
+			passageType = 0x1A
+			passageName = "barrel"
 		}
-		g.lastKeys[i] = pressed
+		// Build list of passage rooms
+		var passageRooms []byte
+		for room := 0; room < data.NumRooms; room++ {
+			entities := data.GenRoomEntityData[room]
+			for _, pair := range entities {
+				for side := 0; side < 2; side++ {
+					var e [8]byte
+					if side == 0 {
+						copy(e[:], pair[0:8])
+					} else {
+						copy(e[:], pair[8:16])
+					}
+					if int(e[1]) != room || e[0] != passageType {
+						continue
+					}
+					passageRooms = append(passageRooms, byte(room))
+				}
+			}
+		}
+		if len(passageRooms) > 0 {
+			if g.passageJumpIdx == 0 {
+				fmt.Printf("=== %s passages (%d rooms) ===\n", passageName, len(passageRooms))
+				for _, r := range passageRooms {
+					fmt.Printf("  Room %02X\n", r)
+				}
+			}
+			g.passageJumpIdx = g.passageJumpIdx % len(passageRooms)
+			g.room = passageRooms[g.passageJumpIdx]
+			g.eng.ChangeRoom(g.room)
+			fmt.Printf("→ %s room %02X (%d of %d)\n", passageName, g.room, g.passageJumpIdx+1, len(passageRooms))
+			g.passageJumpIdx++
+		} else {
+			fmt.Println("No passages found!")
+		}
+	}
+	g.lastPassagePressed = s3Pressed
+
+	// Character select: 1=Wizard, 2=Knight, 3=Serf (only without Shift)
+	if !shift {
+		charKeys := [3]ebiten.Key{ebiten.KeyDigit1, ebiten.KeyDigit2, ebiten.KeyDigit3}
+		charClasses := [3]data.CharacterClass{data.Wizard, data.Knight, data.Serf}
+		for i, k := range charKeys {
+			pressed := ebiten.IsKeyPressed(k)
+			if pressed && !g.lastKeys[i] {
+				g.eng.SetCharacter(charClasses[i])
+			}
+			g.lastKeys[i] = pressed
+		}
 	}
 
 	act := input.ReadAction()
