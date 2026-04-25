@@ -7,16 +7,45 @@ const (
 	ScreenCols     = 32 // character columns (256/8)
 	ScreenRows     = 24 // character rows (192/8)
 
-	DisplaySize = 6144 // pixel data: 256*192/8
-	AttrSize    = 768  // attributes: 32*24
+	DisplaySize = 6144                          // pixel data: 256*192/8
+	AttrSize    = ScreenWidthPx * ScreenHeightPx // one attribute byte per pixel
 )
+
+// ColourMode controls whether attributes are interpreted per-cell (authentic
+// ZX Spectrum colour clash) or per-pixel (clash-free).
+type ColourMode int
+
+const (
+	// ColourModeAuthentic replicates ZX Spectrum behaviour: one attribute
+	// per 8×8 cell. Writes via FillAttrArea / SetCellAttr / StampSpriteAttr
+	// fill every pixel of the affected cell with the same attribute, so the
+	// per-pixel attribute array holds a cell-uniform image.
+	ColourModeAuthentic ColourMode = iota
+
+	// ColourModePerPixel gives each pixel its own attribute. Background
+	// fills still stamp whole cells; sprites only stamp attributes at the
+	// pixels their bitmap actually covers, so they no longer clobber the
+	// surrounding background colours.
+	ColourModePerPixel
+)
+
+// Mode is the global colour-attribute mode. Switching between frames is
+// supported: the next full redraw converges the display to the new mode.
+var Mode = ColourModeAuthentic
 
 // Buffer represents the ZX Spectrum display memory.
 // Pixel data uses the original interleaved layout.
-// Attributes use the standard 32×24 grid.
+// Attrs holds one attribute byte per pixel (row-major, y*256+x). In authentic
+// mode every pixel in a cell carries the same attribute; in per-pixel mode
+// each pixel is independent.
 type Buffer struct {
-	Pixels [DisplaySize]byte // $4000-$57FF equivalent
-	Attrs  [AttrSize]byte    // $5800-$5AFF equivalent
+	Pixels [DisplaySize]byte
+	Attrs  [AttrSize]byte
+}
+
+// AttrPixelAddr returns the attribute index for pixel coordinate (x, y).
+func AttrPixelAddr(x, y int) int {
+	return y*ScreenWidthPx + x
 }
 
 // yTable maps pixel Y (0-191) to the byte offset within Pixels.
@@ -44,13 +73,6 @@ func init() {
 // PixelAddr returns the byte offset in Pixels for pixel coordinate (x, y).
 func PixelAddr(x, y int) uint16 {
 	return yTable[y] + uint16(x>>3)
-}
-
-// AttrAddr returns the byte offset in Attrs for pixel coordinate (x, y).
-func AttrAddr(x, y int) uint16 {
-	col := x >> 3
-	row := y >> 3
-	return uint16(row*ScreenCols + col)
 }
 
 // SetPixel sets a single pixel at (x, y) using OR mode.
@@ -105,10 +127,120 @@ func (b *Buffer) Clear() {
 
 // FillAttrArea fills a rectangular attribute area with the given attribute byte.
 // (col, row) is the top-left character cell, (w, h) is size in character cells.
+// Mode-independent: both authentic and per-pixel mode stamp every pixel in
+// the affected cells, since this call is used for background regions.
 func (b *Buffer) FillAttrArea(col, row, w, h int, attr byte) {
-	for r := row; r < row+h && r < ScreenRows; r++ {
-		for c := col; c < col+w && c < ScreenCols; c++ {
-			b.Attrs[r*ScreenCols+c] = attr
+	x0 := col * 8
+	y0 := row * 8
+	x1 := x0 + w*8
+	y1 := y0 + h*8
+	b.fillAttrPixels(x0, y0, x1, y1, attr)
+}
+
+// fillAttrPixels stamps `attr` into every pixel in [x0,x1) × [y0,y1),
+// clipping to the screen.
+func (b *Buffer) fillAttrPixels(x0, y0, x1, y1 int, attr byte) {
+	if x0 < 0 {
+		x0 = 0
+	}
+	if y0 < 0 {
+		y0 = 0
+	}
+	if x1 > ScreenWidthPx {
+		x1 = ScreenWidthPx
+	}
+	if y1 > ScreenHeightPx {
+		y1 = ScreenHeightPx
+	}
+	for y := y0; y < y1; y++ {
+		base := y * ScreenWidthPx
+		for x := x0; x < x1; x++ {
+			b.Attrs[base+x] = attr
+		}
+	}
+}
+
+// SetCellAttr sets the attribute for one 8×8 character cell. Works in both
+// modes because the underlying storage is per-pixel and a cell write simply
+// stamps all 64 pixels.
+func (b *Buffer) SetCellAttr(col, row int, attr byte) {
+	if col < 0 || col >= ScreenCols || row < 0 || row >= ScreenRows {
+		return
+	}
+	x0 := col * 8
+	y0 := row * 8
+	for y := y0; y < y0+8; y++ {
+		base := y * ScreenWidthPx
+		for x := x0; x < x0+8; x++ {
+			b.Attrs[base+x] = attr
+		}
+	}
+}
+
+// StampSpriteAttr writes the given attribute into the display's attribute
+// buffer at the pixel positions touched by a 2-byte-wide entity sprite. The
+// sprite data format matches DrawSpriteXOR/DrawSpriteOR: first byte is the
+// height in rows, followed by 2 bytes per row (top row first) and drawn
+// upward from (x, y).
+//
+// In authentic mode the function rounds to cells and stamps whole 8×8
+// blocks, reproducing the original cell-based attribute writes (matching
+// the Z80 set_entity_attrs routine). In per-pixel mode it stamps only at
+// the pixel positions where the sprite bitmap has a set bit, so the sprite
+// does not clobber background attributes around its mask.
+func (b *Buffer) StampSpriteAttr(x, y int, data []byte, attr byte) {
+	if attr == 0 || len(data) < 1 {
+		return
+	}
+	height := int(data[0])
+	if len(data) < 1+height*2 {
+		return
+	}
+
+	if Mode == ColourModeAuthentic {
+		// Width: 2 cells if byte-aligned, 3 if the sprite straddles a
+		// cell boundary, matching the Z80 $5E10 width-bytes rule.
+		actualWidth := 2
+		if x&7 != 0 {
+			actualWidth = 3
+		}
+		// Height: Z80 formula from set_entity_attrs at $A02E.
+		attrH := ((height >> 2) + 1) >> 1
+		attrH = (attrH & 0x1F) + 1
+
+		startCol := x >> 3
+		startRow := y >> 3
+		for r := 0; r < attrH; r++ {
+			for c := 0; c < actualWidth; c++ {
+				b.SetCellAttr(startCol+c, startRow-r, attr)
+			}
+		}
+		return
+	}
+
+	// Per-pixel mode: stamp attr only where the sprite bitmap is set.
+	// Sprite draws upward from y (pixel row 0 sits at y, row 1 at y-1, …).
+	for row := 0; row < height; row++ {
+		py := y - row
+		if py < 0 || py >= ScreenHeightPx {
+			continue
+		}
+		b1 := data[1+row*2]
+		b2 := data[1+row*2+1]
+		base := py * ScreenWidthPx
+		for bit := 0; bit < 8; bit++ {
+			if b1&(0x80>>uint(bit)) != 0 {
+				px := x + bit
+				if px >= 0 && px < ScreenWidthPx {
+					b.Attrs[base+px] = attr
+				}
+			}
+			if b2&(0x80>>uint(bit)) != 0 {
+				px := x + 8 + bit
+				if px >= 0 && px < ScreenWidthPx {
+					b.Attrs[base+px] = attr
+				}
+			}
 		}
 	}
 }
@@ -344,14 +476,11 @@ func (b *Buffer) DrawSpriteWideXOR(x, y, widthBytes, height int, data []byte) {
 
 // SetAttrGrid writes a rectangular grid of attribute bytes at (col, row) in character cells.
 // data is a flat array of w*h attribute bytes, row-major order.
+// Each grid cell stamps all 64 of its pixels with the same attribute (both modes).
 func (b *Buffer) SetAttrGrid(col, row int, data []byte, w, h int) {
 	for r := 0; r < h; r++ {
 		for c := 0; c < w; c++ {
-			ar := row + r
-			ac := col + c
-			if ar >= 0 && ar < ScreenRows && ac >= 0 && ac < ScreenCols {
-				b.Attrs[ar*ScreenCols+ac] = data[r*w+c]
-			}
+			b.SetCellAttr(col+c, row+r, data[r*w+c])
 		}
 	}
 }

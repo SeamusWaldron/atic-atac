@@ -2,6 +2,39 @@
 
 These are hard-won lessons from building a Go replication of Manic Miner from Z80 assembly. Every one of these was learned through bugs, rewrites, or wasted effort.
 
+## Day-One Features (add before any gameplay)
+
+### Screenshot System (Shift+8 / *)
+Add a screenshot function from the very first build. Press Shift+8 (*) to save a PNG of the current screen. **Name the file descriptively** so it helps with debugging:
+
+```
+screenshot_<game>_<state>_<detail>_<timestamp>.png
+```
+
+Examples:
+- `screenshot_jetpac_title_piano-phase_20260328_091500.png`
+- `screenshot_jetpac_playing_cavern-03_20260328_091530.png`
+- `screenshot_jetpac_gameover_boot-descent_20260328_091545.png`
+
+Include in the filename:
+- Game name
+- Current game state (title, playing, settings, gameover, etc.)
+- Relevant detail (level/cavern number, screen name, animation phase)
+- Timestamp
+
+This is essential because the developer cannot always take OS-level screenshots while the game captures keyboard input. The descriptive naming allows the AI to understand what it's looking at when the screenshot is shared.
+
+```go
+func (g *Game) saveScreenshot(scr *ebiten.Image) {
+    state := stateNames[g.env.State]
+    detail := g.screenshotDetail() // e.g. "level-03" or "cavern-central"
+    filename := fmt.Sprintf("screenshot_%s_%s_%s_%s.png",
+        gameName, state, detail,
+        time.Now().Format("20060102_150405"))
+    // ... save PNG
+}
+```
+
 ## Critical Rules
 
 ### 1. NEVER guess mechanics — read the original code

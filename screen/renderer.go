@@ -31,51 +31,46 @@ var FlashCounter int
 // RenderToRGBA converts the ZX Spectrum buffer into a flat RGBA byte slice.
 // Output is 256*192*4 bytes (RGBA for each pixel).
 // Handles the FLASH attribute (bit 7): swaps INK/PAPER every 16 frames.
+//
+// Attributes are read once per pixel. In authentic mode every pixel in an
+// 8×8 cell carries the same attribute byte, so the result is bit-identical
+// to the original cell-based Spectrum display. In per-pixel mode, sprites
+// and backgrounds each own their own pixels' attributes and there is no
+// colour clash.
 func RenderToRGBA(buf *Buffer, out []byte) {
 	FlashCounter++
 	flashSwap := (FlashCounter / 16) % 2
 
-	for charRow := 0; charRow < ScreenRows; charRow++ {
+	for y := 0; y < ScreenHeightPx; y++ {
+		rowBase := yTable[y]
+		attrRowBase := y * ScreenWidthPx
 		for charCol := 0; charCol < ScreenCols; charCol++ {
-			attr := buf.Attrs[charRow*ScreenCols+charCol]
-			ink := attr & 0x07
-			paper := (attr >> 3) & 0x07
-			bright := (attr >> 6) & 0x01
-			flash := (attr >> 7) & 0x01
+			pixByte := buf.Pixels[rowBase+uint16(charCol)]
+			for bit := 0; bit < 8; bit++ {
+				x := charCol*8 + bit
+				attr := buf.Attrs[attrRowBase+x]
 
-			if bright != 0 {
-				ink += 8
-				paper += 8
-			}
-
-			// FLASH: swap ink and paper every 16 frames
-			if flash != 0 && flashSwap != 0 {
-				ink, paper = paper, ink
-			}
-
-			inkC := Palette[ink]
-			paperC := Palette[paper]
-
-			for pixRow := 0; pixRow < 8; pixRow++ {
-				y := charRow*8 + pixRow
-				addr := yTable[y] + uint16(charCol)
-				pixByte := buf.Pixels[addr]
-
-				for bit := 0; bit < 8; bit++ {
-					x := charCol*8 + bit
-					off := (y*ScreenWidthPx + x) * 4
-					if pixByte&(0x80>>uint(bit)) != 0 {
-						out[off] = inkC.R
-						out[off+1] = inkC.G
-						out[off+2] = inkC.B
-						out[off+3] = inkC.A
-					} else {
-						out[off] = paperC.R
-						out[off+1] = paperC.G
-						out[off+2] = paperC.B
-						out[off+3] = paperC.A
-					}
+				ink := attr & 0x07
+				paper := (attr >> 3) & 0x07
+				if attr&0x40 != 0 {
+					ink += 8
+					paper += 8
 				}
+				if attr&0x80 != 0 && flashSwap != 0 {
+					ink, paper = paper, ink
+				}
+
+				off := (y*ScreenWidthPx + x) * 4
+				var c color.RGBA
+				if pixByte&(0x80>>uint(bit)) != 0 {
+					c = Palette[ink]
+				} else {
+					c = Palette[paper]
+				}
+				out[off] = c.R
+				out[off+1] = c.G
+				out[off+2] = c.B
+				out[off+3] = c.A
 			}
 		}
 	}

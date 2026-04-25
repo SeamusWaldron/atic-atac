@@ -70,8 +70,10 @@ type GameEnv struct {
 
 	// Entities
 	entities   *entity.Pool
-	spawnDelay int
-	rand       uint16 // simple PRNG
+	spawnDelay    int
+	pickupBlock   int    // frames to block pickup after a successful pickup
+	foodReplenIdx int    // round-robin index for food replenishment
+	rand          uint16 // simple PRNG
 
 	// Weapon
 	weaponActive bool
@@ -104,6 +106,13 @@ type GameEnv struct {
 	doorCycleTimer int
 	doorCycleIdx   int  // round-robin index for which door to toggle next
 	mummyRoom      byte // Mummy spawns in same room as red key (Z80 $98EF)
+
+	// Cheat modes
+	immunity      bool
+	infiniteLives bool
+
+	// Audio
+	sounds []SoundEvent
 
 	// Rendering
 	roomDrawn bool
@@ -178,6 +187,24 @@ func (g *GameEnv) State() GameState { return g.state }
 
 // Buffer returns the display buffer.
 func (g *GameEnv) Buffer() *screen.Buffer { return &g.buf }
+
+// Room returns the current room number.
+func (g *GameEnv) Room() byte { return g.room }
+
+// SetImmunity enables/disables immunity mode (no energy loss).
+func (g *GameEnv) SetImmunity(on bool) { g.immunity = on }
+
+// SetInfiniteLives enables/disables infinite lives mode.
+func (g *GameEnv) SetInfiniteLives(on bool) { g.infiniteLives = on }
+
+// Immunity returns whether immunity mode is on.
+func (g *GameEnv) Immunity() bool { return g.immunity }
+
+// InfiniteLives returns whether infinite lives mode is on.
+func (g *GameEnv) InfiniteLives() bool { return g.infiniteLives }
+
+// Entities returns the entity pool (for debug overlay).
+func (g *GameEnv) Entities() *entity.Pool { return g.entities }
 
 // KeyRooms returns the rooms containing key entities (for debug browsing).
 func (g *GameEnv) KeyRooms() []byte {
@@ -324,22 +351,29 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 
 	// Food auto-consumption on contact (Z80 h_food at $8C63)
 	g.checkFoodPickup()
-	// Colour key auto-pickup on contact
-	g.checkColourKeyPickup()
+	g.checkMushroomPoison()
+	// Pickup cooldown — Z80 $5E1F blocks pickup for a few frames after
+	// each successful pickup, preventing chain-pickup of dropped items.
+	if g.pickupBlock > 0 {
+		g.pickupBlock--
+	} else {
+		g.checkColourKeyPickup()
+		g.checkPickup(act)
+	}
 	// Secret passage check (Z80 h_barrel/$9421, h_bookcase/$9428, h_clock/$942F)
 	g.checkSecretPassage()
 	// Trap door check (Z80 h_trap_closed/$91BC, h_trap_open/$91C5)
 	g.checkTrapDoor()
-	// Key/collectible/ACG key pickup on Enter key
-	g.checkPickup(act)
 
 	// Passive energy drain: 1 point every 16 frames (original: $0F mask check)
-	if g.frame&0x0F == 0 && g.energy > 0 {
+	if !g.immunity && g.frame&0x0F == 0 && g.energy > 0 {
 		g.energy--
 	}
 
 	// Clock
 	g.updateClock()
+	// Food replenishment (Z80 replenish_food at $9924)
+	g.replenishFood()
 
 	// Check win condition: all 3 ACG key pieces collected
 	// Win condition: Z80 h_acg_exit at $961B — player must touch the ACG
@@ -354,6 +388,7 @@ func (g *GameEnv) stepPlaying(act action.Action) {
 
 	// Door open/close cycling (Z80 $5E2E timer, XOR $01 toggles bit 0)
 	g.cycleDoors()
+	g.cycleTraps()
 
 	// Render
 	g.clearPlayArea()
@@ -395,7 +430,7 @@ func (g *GameEnv) stepDying() {
 			partialData[0] = byte(g.playerAnimH)
 			copy(partialData[1:], sprData[1:1+g.playerAnimH*2])
 			g.buf.DrawSpriteXOR(int(g.playerX), int(g.playerY), partialData)
-			g.paintEntityAttr(int(g.playerX), int(g.playerY), 2, g.playerAnimH, 0x47)
+			g.paintEntityAttr(int(g.playerX), int(g.playerY), partialData, 0x47)
 		}
 	}
 
@@ -410,11 +445,11 @@ func (g *GameEnv) stepDying() {
 			addr := data.GenSpriteTable[group][frame]
 			if spr := data.GenMenuIcons[addr]; spr != nil {
 				g.buf.DrawSpriteXOR(int(g.deathX), int(g.deathY), spr)
-				g.paintEntityAttr(int(g.deathX), int(g.deathY), 2, int(spr[0]), 0x45)
+				g.paintEntityAttr(int(g.deathX), int(g.deathY), spr, 0x45)
 			}
 		}
 
-		if g.lives == 0 {
+		if g.lives == 0 && !g.infiniteLives {
 			g.state = StateGameOver
 			g.frame = 0
 		} else {
@@ -447,6 +482,9 @@ func (g *GameEnv) stepDead() {
 // Z80 h_player_appear at $8CB7: height grows, colour cycles.
 func (g *GameEnv) stepSpawning() {
 	g.frame++
+	if g.frame == 1 {
+		g.emitSound(SoundPlayerSpawn)
+	}
 
 	sprites := data.CharacterSprites(g.character)
 	sprData := sprites[data.DirDown][0]
@@ -479,7 +517,7 @@ func (g *GameEnv) stepSpawning() {
 		g.buf.DrawSpriteXOR(int(g.playerX), int(g.playerY), partialData)
 		// Colour: bright + cycling ink
 		attr := byte(0x40) | g.playerAnimClr
-		g.paintEntityAttr(int(g.playerX), int(g.playerY), 2, g.playerAnimH, attr)
+		g.paintEntityAttr(int(g.playerX), int(g.playerY), partialData, attr)
 	}
 
 	// When fully grown: switch to playing
@@ -590,12 +628,10 @@ func (g *GameEnv) stepFalling() {
 		g.buf.Pixels[i] = 0
 	}
 
-	// The Z80 draws all 12 squares as static pixels, then reveals them
-	// outward via an attr spiral. We approximate this by drawing a moving
-	// window of 2 squares that expands outward over the 128 frames.
-	// 128 frames / 12 squares ≈ 10 frames per square.
-	elapsed := 128 - g.fallTimer // 1→128
-	current := elapsed / 10      // which square (0=innermost → 11=outermost)
+	// Progressive reveal: expand outward over 30 frames.
+	// 30 frames / 12 squares ≈ 2.5 frames per square.
+	elapsed := 30 - g.fallTimer // 1→30
+	current := (elapsed * 12) / 30 // scale to 0-11
 	if current > 11 {
 		current = 11
 	}
@@ -827,6 +863,10 @@ func (g *GameEnv) movePlayer(act action.Action) {
 		g.walkCounter++
 		g.lastDX = dx
 		g.lastDY = dy
+		// Z80 walk_sound at $A3C7: click every 2 frames
+		if g.walkCounter%4 == 0 {
+			g.emitSound(SoundWalkClick)
+		}
 	}
 }
 
@@ -1157,8 +1197,23 @@ func (g *GameEnv) updateCreatures() {
 			e.Y += e.VY * 2
 		}
 
-		// Random direction change every ~64 frames
-		if e.Frame%64 == 0 {
+		// Direction change rate varies by creature type (Z80 per-handler masks)
+		interval := byte(16) // default
+		switch entity.CreatureKind(e.Timer) {
+		case entity.KindGhoul:
+			interval = 8  // and $07
+		case entity.KindSpider, entity.KindPumpkin, entity.KindBatlet, entity.KindGhostlet:
+			interval = 16 // and $0F
+		case entity.KindBlob:
+			interval = 17 // dec from $11
+		case entity.KindWitch:
+			interval = 16 // dec from $10
+		case entity.KindMonk, entity.KindBat:
+			interval = 32 // dec from $20
+		case entity.KindGhost:
+			interval = 24
+		}
+		if e.Frame%interval == 0 {
 			g.setRandomVelocity(e)
 		}
 	})
@@ -1175,52 +1230,61 @@ func (g *GameEnv) updateBosses() {
 		}
 		e.Frame++ // animation counter
 
-		// All bosses: chase player in same room
 		speed := 1
-		if e.X < px {
-			e.X += speed
-		} else if e.X > px {
-			e.X -= speed
-		}
-		if e.Y < py {
-			e.Y += speed
-		} else if e.Y > py {
-			e.Y -= speed
-		}
 
-		// Boss-specific behaviour
 		switch e.Timer {
+		case entity.BossMummy:
+			// Z80 h_mummy at $8862: hunts leaf, then red key, then chases player
+			leafFound := false
+			g.entities.ForEachInRoom(e.Room, func(item *entity.Entity) {
+				if item.Active && item.Graphic == 0x80 && item.Room == e.Room { // leaf
+					// Move toward leaf
+					if e.X < item.X { e.X += speed } else if e.X > item.X { e.X -= speed }
+					if e.Y < item.Y { e.Y += speed } else if e.Y > item.Y { e.Y -= speed }
+					// Check if reached leaf
+					if abs(e.X-item.X) < 4 && abs(e.Y-item.Y) < 4 {
+						// Move leaf to room $6B
+						item.Room = 0x6B
+						item.X = 0x50
+						item.Y = 0x50
+					}
+					leafFound = true
+				}
+			})
+			if !leafFound {
+				// Chase player (simplified from Z80's red key tracking)
+				if e.X < px { e.X += speed } else if e.X > px { e.X -= speed }
+				if e.Y < py { e.Y += speed } else if e.Y > py { e.Y -= speed }
+			}
+
 		case entity.BossDracula:
-			// Runs away if player has crucifix
+			// Z80 h_dracula at $8906: chase player, flee crucifix, room hop
+			if e.X < px { e.X += speed } else if e.X > px { e.X -= speed }
+			if e.Y < py { e.Y += speed } else if e.Y > py { e.Y -= speed }
 			for _, slot := range g.inventory {
 				if slot.Occupied && slot.Name == "CRUCIX" {
-					// Invert — run away
-					if e.X < px {
-						e.X -= speed * 2
-					} else {
-						e.X += speed * 2
-					}
-					if e.Y < py {
-						e.Y -= speed * 2
-					} else {
-						e.Y += speed * 2
-					}
+					if e.X < px { e.X -= speed * 3 } else { e.X += speed * 3 }
+					if e.Y < py { e.Y -= speed * 3 } else { e.Y += speed * 3 }
 					break
 				}
 			}
-			// Room hopping every 50 frames
 			if e.Frame%50 == 0 {
 				newRoom := g.nextRand()
 				if int(newRoom) < data.NumRooms && newRoom != g.room {
 					ra := data.RoomAttrs[newRoom]
-					if ra.Style < 3 { // only square rooms
-						e.Room = newRoom
-					}
+					if ra.Style < 3 { e.Room = newRoom }
 				}
 			}
 
+		case entity.BossDevil:
+			// Z80 h_devil at $89ED: always chases player
+			if e.X < px { e.X += speed } else if e.X > px { e.X -= speed }
+			if e.Y < py { e.Y += speed } else if e.Y > py { e.Y -= speed }
+
 		case entity.BossFrankenstein:
-			// Defeated instantly if player has spanner
+			// Z80 h_frankenstein at $8988: chase player, killed by spanner
+			if e.X < px { e.X += speed } else if e.X > px { e.X -= speed }
+			if e.Y < py { e.Y += speed } else if e.Y > py { e.Y -= speed }
 			for _, slot := range g.inventory {
 				if slot.Occupied && slot.Name == "SPANNER" {
 					e.Active = false
@@ -1229,6 +1293,36 @@ func (g *GameEnv) updateBosses() {
 					return
 				}
 			}
+
+		case entity.BossHunchback:
+			// Z80 h_hunchback at $8AFF: hunts 8 specific floor items, steals them.
+			// Items: collectibles with specific graphics.
+			itemFound := false
+			g.entities.ForEachInRoom(e.Room, func(item *entity.Entity) {
+				if itemFound { return }
+				if !item.Active || item.Room != e.Room { return }
+				if item.Type != entity.TypeCollectible && item.Type != entity.TypeKey { return }
+				// Hunchback targets collectibles on the floor
+				if item.Type == entity.TypeCollectible {
+					// Move toward item
+					if e.X < item.X { e.X += speed } else if e.X > item.X { e.X -= speed }
+					if e.Y < item.Y { e.Y += speed } else if e.Y > item.Y { e.Y -= speed }
+					// Check if reached — steal and remove
+					if abs(e.X-item.X) < 4 && abs(e.Y-item.Y) < 4 {
+						item.Active = false
+					}
+					itemFound = true
+				}
+			})
+			// If no item to hunt, stay still (Z80: velocity = 0)
+			if !itemFound {
+				// Idle — don't chase player
+			}
+
+		default:
+			// Unknown boss: chase player
+			if e.X < px { e.X += speed } else if e.X > px { e.X -= speed }
+			if e.Y < py { e.Y += speed } else if e.Y > py { e.Y -= speed }
 		}
 
 		// Wall bounds for bosses
@@ -1271,7 +1365,7 @@ func (g *GameEnv) checkBossPlayerCollision() {
 		if e.Timer == entity.BossHunchback {
 			damage = 16
 		}
-		if g.frame&0x07 == 0 {
+		if !g.immunity && g.frame&0x07 == 0 {
 			if g.energy > damage {
 				g.energy -= damage
 			} else {
@@ -1296,15 +1390,14 @@ func (g *GameEnv) checkCreaturePlayerCollision() {
 			return
 		}
 		if abs(px-e.X) < collisionDist && abs(py-e.Y) < collisionDist {
-			// Original: damage_32 ($8ED7) drains $20 (32) per contact event.
-			// Gate to every 8 frames (~6 hits/sec) to avoid instant death.
-			if g.frame&0x07 == 0 {
+			if !g.immunity && g.frame&0x07 == 0 {
 				if g.energy > 32 {
 					g.energy -= 32
 				} else {
 					g.energy = 0
 				}
 				g.hudDirty = true
+				g.emitSound(SoundMonsterTouch)
 				if g.energy == 0 {
 					g.playerDeath()
 				}
@@ -1314,9 +1407,10 @@ func (g *GameEnv) checkCreaturePlayerCollision() {
 }
 
 func (g *GameEnv) playerDeath() {
-	if g.lives > 0 {
+	if !g.infiniteLives && g.lives > 0 {
 		g.lives--
 	}
+	g.emitSound(SoundPlayerDeath)
 	// Start death shrink animation (Z80 h_death at $8D45)
 	g.state = StateDying
 	g.deathX = g.playerX
@@ -1327,9 +1421,54 @@ func (g *GameEnv) playerDeath() {
 	g.hudDirty = true
 }
 
+// cycleTraps toggles trap doors between open ($19) and closed ($18).
+// Z80 h_trap_closed at $91BC: toggles when $5E12 (frame counter low byte) = 0,
+// which happens every 256 frames (~5 seconds).
+func (g *GameEnv) cycleTraps() {
+	if g.frame&0xFF != 0 {
+		return // only toggle when low byte of frame counter is 0
+	}
+
+	entities := data.GenRoomEntityData[int(g.room)]
+	for ei, pair := range entities {
+		for side := 0; side < 2; side++ {
+			var e [8]byte
+			if side == 0 {
+				copy(e[:], pair[0:8])
+			} else {
+				copy(e[:], pair[8:16])
+			}
+			if e[1] != g.room {
+				continue
+			}
+			if e[0] != 0x18 && e[0] != 0x19 {
+				continue
+			}
+			// Toggle: XOR $01 on the runtime type (Z80 trap_common at $91CC)
+			key := uint32(g.room)<<16 | uint32(ei)
+			rt, ok := g.doorTypes[key]
+			if !ok {
+				rt = e[0] // use original type if not yet tracked
+			}
+			g.doorTypes[key] = rt ^ 0x01
+			g.emitSound(SoundDoorNoise)
+			break // one per pair
+		}
+	}
+}
+
 // ---------- WEAPON ----------
 
 func (g *GameEnv) fireWeapon() {
+	// Z80: knight=$A41B(axe), wizard=$A438(fireball), serf=$A427(sword)
+	switch g.character {
+	case data.Knight:
+		g.emitSound(SoundAxeThrow)
+	case data.Wizard:
+		g.emitSound(SoundFireball)
+	case data.Serf:
+		g.emitSound(SoundSwordThrow)
+	}
 	g.weaponActive = true
 	g.weaponX = int(g.playerX)
 	g.weaponY = int(g.playerY)
@@ -1386,10 +1525,12 @@ func (g *GameEnv) updateWeapon() {
 	if !inWallBounds(g.weaponX, roomCentreX, int(style.Width)) {
 		g.weaponDX = -g.weaponDX
 		g.weaponX += g.weaponDX
+		g.emitSound(SoundWeaponBounce)
 	}
 	if !inWallBounds(g.weaponY, roomCentreY, int(style.Height)) {
 		g.weaponDY = -g.weaponDY
 		g.weaponY += g.weaponDY
+		g.emitSound(SoundWeaponBounce)
 	}
 
 	if g.weaponTimer <= 0 {
@@ -1410,6 +1551,7 @@ func (g *GameEnv) updateWeapon() {
 			e.VX = 0
 			e.VY = 0
 			g.weaponActive = false
+			g.emitSound(SoundWeaponPop)
 			g.score += 155
 			g.hudDirty = true
 		}
@@ -1593,6 +1735,111 @@ func (g *GameEnv) checkFoodPickup() {
 		g.energy = byte(newEnergy)
 		e.Active = false
 		g.hudDirty = true
+		g.emitSound(SoundFoodEaten)
+	})
+}
+
+// replenishFood respawns eaten food items over time.
+// Z80 replenish_food at $9924: when 9-bit counter = 0 (~every 512 frames),
+// finds the next empty food slot not in the player's room and respawns it
+// with a random food graphic ($50-$57).
+func (g *GameEnv) replenishFood() {
+	// 9-bit counter check: low 9 bits of frame counter must be 0
+	if g.frame&0x1FF != 0 {
+		return
+	}
+
+	// Round-robin through food entities
+	foodCount := len(data.FoodInit)
+	if foodCount == 0 {
+		return
+	}
+
+	// Try to find an eaten food item to replenish
+	for tries := 0; tries < foodCount; tries++ {
+		g.foodReplenIdx = (g.foodReplenIdx + 1) % foodCount
+		idx := g.foodReplenIdx
+
+		// Find the entity for this food item
+		entityIdx := -1
+		foodNum := 0
+		for i := range g.entities.Entities {
+			e := &g.entities.Entities[i]
+			if e.Type == entity.TypeFood {
+				if foodNum == idx {
+					entityIdx = i
+					break
+				}
+				foodNum++
+			} else if !e.Active {
+				// Check if this was a food item (by matching init data room)
+				fi := data.FoodInit[idx]
+				if byte(e.Room) == fi[1] && !e.Active {
+					entityIdx = i
+					break
+				}
+			}
+		}
+
+		// Simpler approach: scan for inactive food-position matches
+		fi := data.FoodInit[idx]
+		found := false
+		for i := range g.entities.Entities {
+			e := &g.entities.Entities[i]
+			if !e.Active && e.Room == fi[1] && e.X == int(fi[3]) && e.Y == int(fi[4]) {
+				// This food slot is empty and not in player's room
+				if e.Room != g.room {
+					// Respawn with random food graphic
+					e.Active = true
+					e.Type = entity.TypeFood
+					e.Graphic = 0x50 + byte(g.nextRand()&0x07)
+					e.Attr = fi[5]
+					found = true
+				}
+				break
+			}
+		}
+		_ = entityIdx
+		if found {
+			return
+		}
+	}
+}
+
+// checkMushroomPoison drains 1 energy per frame while touching a mushroom.
+// Z80 h_mushroom at $988B: continuous drain, colour cycles every 4 frames
+// through table [$42,$43,$46,$43] (red, magenta, yellow, magenta).
+func (g *GameEnv) checkMushroomPoison() {
+	px := int(g.playerX)
+	py := int(g.playerY)
+	const touchDist = 12
+
+	mushroomColours := [4]byte{0x42, 0x43, 0x46, 0x43}
+
+	g.entities.ForEachInRoom(g.room, func(e *entity.Entity) {
+		// Mushrooms use handler graphic $A0-$A1 (entity types in handler_table)
+		// In our entity system they're spawned as TypeCreature with specific graphics
+		// Actually, mushrooms are spawning entities — check if this is a mushroom
+		// by graphic range. Mushroom graphics are around $A0.
+		// For now, check entity Graphic >= 0xA0 and Type is creature-like
+		if e.Graphic < 0xA0 || e.Graphic > 0xA1 {
+			return
+		}
+		if abs(px-e.X) >= touchDist || abs(py-e.Y) >= touchDist {
+			return
+		}
+
+		// Colour cycle every 4 frames
+		e.Attr = mushroomColours[(g.frame>>2)&0x03]
+
+		// Drain 1 energy per frame
+		if !g.immunity && g.energy > 0 {
+			g.energy--
+			g.hudDirty = true
+			if g.energy == 0 {
+				g.playerDeath()
+			}
+		}
 	})
 }
 
@@ -1610,14 +1857,6 @@ func (g *GameEnv) checkColourKeyPickup() {
 		if abs(px-e.X) >= touchDist || abs(py-e.Y) >= touchDist {
 			return
 		}
-		slot := g.findFreeSlot()
-		if slot < 0 {
-			g.dropItem()
-			slot = g.findFreeSlot()
-			if slot < 0 {
-				return
-			}
-		}
 		// Colour key name from attr: $42=red, $44=green, $45=cyan, $46=yellow
 		name := "KEY"
 		switch e.Attr {
@@ -1630,19 +1869,30 @@ func (g *GameEnv) checkColourKeyPickup() {
 		case 0x46:
 			name = "YELLOW"
 		}
-		g.inventory[slot] = InvSlot{
+		newItem := InvSlot{
 			Occupied: true,
 			ItemType: e.Graphic,
 			Attr:     e.Attr,
 			Name:     name,
 		}
+		// Deactivate picked-up entity FIRST — frees a pool slot so
+		// dropAndInsert's Spawn() will always succeed.
 		e.Active = false
+		slot := g.findFreeSlot()
+		if slot >= 0 {
+			g.inventory[slot] = newItem
+		} else {
+			g.dropAndInsert(newItem)
+		}
 		g.hudDirty = true
+		g.emitSound(SoundItemPickup)
+		g.pickupBlock = 25 // ~0.5s cooldown matching Z80 $5E1F two-phase reset
 	})
 }
 
 // checkPickup handles ACG key/collectible pickup on Enter key press.
 // Z80 h_pickup_item at $92F5: checks pickup key ($5E20), then touch ($90FB).
+// If no item is in range, Z80 $93E3 drops the oldest inventory item (manual drop).
 func (g *GameEnv) checkPickup(act action.Action) {
 	if act&action.Pickup == 0 {
 		return
@@ -1652,7 +1902,9 @@ func (g *GameEnv) checkPickup(act action.Action) {
 	py := int(g.playerY)
 	const pickupDist = 16
 
+	pickedUp := false
 	g.entities.ForEachInRoom(g.room, func(e *entity.Entity) {
+		if pickedUp { return } // only pick up one item per press
 		if e.Type != entity.TypeKey && e.Type != entity.TypeCollectible {
 			return
 		}
@@ -1666,78 +1918,137 @@ func (g *GameEnv) checkPickup(act action.Action) {
 
 		switch e.Type {
 		case entity.TypeCollectible:
-			// Collectibles with game effects (crucifix, spanner, leaf) go into
-			// inventory. Others just score points.
+			e.Active = false
 			if collectibleNeedsInventory(e.Graphic) {
-				slot := g.findFreeSlot()
-				if slot < 0 {
-					g.dropItem()
-					slot = g.findFreeSlot()
-					if slot < 0 {
-						return
-					}
-				}
-				g.inventory[slot] = InvSlot{
+				newItem := InvSlot{
 					Occupied: true,
 					ItemType: e.Graphic,
 					Attr:     e.Attr,
 					Name:     collectibleName(e.Graphic),
 				}
-			}
-			g.score += 100
-			e.Active = false
-
-		case entity.TypeKey:
-			slot := g.findFreeSlot()
-			if slot < 0 {
-				// Inventory full — drop last item at player position
-				// Z80 drop_item at $9358: drops slot 3, shifts others
-				g.dropItem()
-				slot = g.findFreeSlot()
-				if slot < 0 {
-					return // shouldn't happen after drop
+				slot := g.findFreeSlot()
+				if slot >= 0 {
+					g.inventory[slot] = newItem
+				} else {
+					g.dropAndInsert(newItem)
 				}
 			}
-			g.inventory[slot] = InvSlot{
+			g.score += 100
+			pickedUp = true
+
+		case entity.TypeKey:
+			e.Active = false
+			newItem := InvSlot{
 				Occupied: true,
 				ItemType: e.Graphic,
 				Attr:     e.Attr,
 				Name:     keyName(e.Graphic),
 			}
-			e.Active = false
+			slot := g.findFreeSlot()
+			if slot >= 0 {
+				g.inventory[slot] = newItem
+			} else {
+				g.dropAndInsert(newItem)
+			}
+			g.emitSound(SoundItemPickup)
+			pickedUp = true
 		}
+		g.pickupBlock = 25
 		g.hudDirty = true
 	})
+
+	// Z80 $93E3: if Enter pressed but nothing picked up, manually drop
+	// the oldest inventory item. This allows rearranging ACG key order.
+	if !pickedUp {
+		g.manualDrop()
+	}
 }
 
-// dropItem drops the last inventory item at the player's position.
-// Z80 drop_item at $9358: places item at player room/position.
-func (g *GameEnv) dropItem() {
-	// Find the last occupied slot
+// manualDrop drops the oldest inventory item on the floor when the player
+// presses Enter with nothing to pick up. Z80 $93E3: drop slot 3, shift
+// slots 1→2 and 2→3, clear slot 1.
+func (g *GameEnv) manualDrop() {
+	// Find the oldest occupied slot (slot 2 first, then 1, then 0)
 	dropSlot := -1
-	for i := len(g.inventory) - 1; i >= 0; i-- {
+	for i := 2; i >= 0; i-- {
 		if g.inventory[i].Occupied {
 			dropSlot = i
 			break
 		}
 	}
 	if dropSlot < 0 {
-		return
+		return // nothing to drop
 	}
 
-	// Create a floor entity for the dropped item
 	dropped := g.inventory[dropSlot]
 	g.inventory[dropSlot] = InvSlot{}
 
+	// Spawn dropped item on the floor
 	e := g.entities.Spawn()
 	if e != nil {
 		e.Type = entity.TypeKey
+		if collectibleNeedsInventory(dropped.ItemType) {
+			e.Type = entity.TypeCollectible
+		}
 		e.Room = g.room
 		e.X = int(g.playerX)
 		e.Y = int(g.playerY)
 		e.Graphic = dropped.ItemType
 		e.Attr = dropped.Attr
+		g.emitSound(SoundItemDrop)
 	}
+
+	// Shift remaining items: compact toward slot 0
+	// Z80 shifts slots 1→2, 2→3 and clears slot 1
+	compact := [3]InvSlot{}
+	ci := 0
+	for i := 0; i < 3; i++ {
+		if g.inventory[i].Occupied {
+			compact[ci] = g.inventory[i]
+			ci++
+		}
+	}
+	g.inventory = compact
+	g.hudDirty = true
+	g.pickupBlock = 25
+}
+
+// dropAndInsert drops the oldest item (slot 2), shifts slots 0→1, 1→2,
+// and inserts the new item into slot 0. Matches Z80 flow:
+//   $9358 drop_item: drops slot 3 (our slot 2)
+//   $934C shift_inventory: shifts slots 1+2 → 2+3 (our 0+1 → 1+2)
+//   $9326 add_inventory: adds to slot 1 (our slot 0)
+// dropAndInsert drops the oldest item (slot 2) as a floor entity, shifts
+// slots 0→1, 1→2, and inserts the new item at slot 0.
+// Callers must deactivate the picked-up entity BEFORE calling this to
+// guarantee a free pool slot for the dropped item.
+func (g *GameEnv) dropAndInsert(newItem InvSlot) {
+	// Drop the oldest item (slot 2) as a floor entity
+	if g.inventory[2].Occupied {
+		dropped := g.inventory[2]
+		e := g.entities.Spawn()
+		if e == nil {
+			return // shouldn't happen — caller freed a slot first
+		}
+		// Determine entity type based on what was stored
+		e.Type = entity.TypeKey
+		if collectibleNeedsInventory(dropped.ItemType) {
+			e.Type = entity.TypeCollectible
+		}
+		e.Room = g.room
+		e.X = int(g.playerX)
+		e.Y = int(g.playerY)
+		e.Graphic = dropped.ItemType
+		e.Attr = dropped.Attr
+		g.emitSound(SoundItemDrop)
+	}
+
+	// Shift: slot 0 → 1, slot 1 → 2
+	g.inventory[2] = g.inventory[1]
+	g.inventory[1] = g.inventory[0]
+
+	// Insert new item at slot 0
+	g.inventory[0] = newItem
 }
 
 func (g *GameEnv) findFreeSlot() int {
@@ -1922,7 +2233,7 @@ func (g *GameEnv) checkTrapDoor() {
 	const trapDist = 12
 
 	entities := data.GenRoomEntityData[int(g.room)]
-	for _, pair := range entities {
+	for ei, pair := range entities {
 		for side := 0; side < 2; side++ {
 			var e [8]byte
 			if side == 0 {
@@ -1933,10 +2244,18 @@ func (g *GameEnv) checkTrapDoor() {
 			if e[1] != g.room {
 				continue
 			}
-			// Type $19 = open trap (player falls through)
-			// Type $18 = closed trap (safe to walk over)
-			if e[0] != 0x19 {
+			// Only check trap door entities ($18/$19)
+			if e[0] != 0x18 && e[0] != 0x19 {
 				continue
+			}
+			// Check runtime state — trap must be open ($19) to fall through
+			key := uint32(g.room)<<16 | uint32(ei)
+			rt, ok := g.doorTypes[key]
+			if !ok {
+				rt = e[0]
+			}
+			if rt != 0x19 {
+				continue // closed trap — safe
 			}
 
 			ex := int(e[3])
@@ -1974,7 +2293,8 @@ func (g *GameEnv) checkTrapDoor() {
 
 			// Start falling tunnel animation (Z80: 128 frames at $9731)
 			g.state = StateFalling
-			g.fallTimer = 128
+			g.emitSound(SoundTrapFall)
+			g.fallTimer = 30 // match trap fall sound length (30 steps × 20ms = 600ms @ 50fps)
 			g.fallDestRoom = destRoom
 			g.fallDestX = byte(destX)
 			g.fallDestY = byte(destY)
@@ -2201,6 +2521,7 @@ func (g *GameEnv) checkDoorExit(dx, dy, rw, rh int) {
 		g.spawnDelay = 32
 		g.weaponActive = false
 		g.markRoomVisited(g.room)
+		g.emitSound(SoundRoomEntry)
 		return
 	}
 }
@@ -2230,44 +2551,22 @@ func (g *GameEnv) drawPlayer() {
 	g.buf.DrawSpriteXOR(int(g.playerX), int(g.playerY), sprData)
 
 	// Paint player attribute colour — bright white
-	sprH := int(sprData[0])
-	g.paintEntityAttr(int(g.playerX), int(g.playerY), 2, sprH, 0x47)
+	g.paintEntityAttr(int(g.playerX), int(g.playerY), sprData, 0x47)
 	// Also need to restore room colour around the player's previous position
 	// but for now just paint the sprite's cells
 }
 
-// paintEntityAttr paints a single attribute colour over the cells an entity
-// sprite covers. Matches Z80 set_entity_attrs at $A00E.
-// Entity sprites draw UPWARD from Y, so attr cells go from Y upward.
-// Z80 uses $5E10 (width_bytes = 2 or 3) based on sub-byte alignment.
-func (g *GameEnv) paintEntityAttr(x, y, widthCells, heightPx int, attr byte) {
-	if attr == 0 {
-		return
-	}
-	// Width: 2 cells if byte-aligned, 3 if sprite straddles a cell boundary
-	// (matching Z80 $5E10 which is set to 2 or 3 by sprite draw setup)
-	actualWidth := widthCells
-	if x&7 != 0 {
-		actualWidth = widthCells + 1
-	}
-
-	// Height: Z80 formula from $A02E: height >> 2, inc, >> 1, & $1F, inc
-	// This gives a tighter cell count than ceil(height/8)
-	attrH := ((heightPx >> 2) + 1) >> 1
-	attrH = (attrH & 0x1F) + 1
-
-	startCol := x >> 3
-	startRow := y >> 3
-
-	for r := 0; r < attrH; r++ {
-		for c := 0; c < actualWidth; c++ {
-			cellCol := startCol + c
-			cellRow := startRow - r
-			if cellCol >= 0 && cellCol < 32 && cellRow >= 0 && cellRow < 24 {
-				g.buf.Attrs[cellRow*32+cellCol] = attr
-			}
-		}
-	}
+// paintEntityAttr paints an entity sprite's attribute into the buffer.
+// In authentic mode this fills the cells the sprite covers (matching Z80
+// set_entity_attrs at $A00E). In per-pixel mode it stamps attributes only
+// at the pixels the sprite bitmap actually sets, so the sprite does not
+// clobber background attributes around its mask.
+//
+// `spr` is the entity sprite blob: byte 0 = height, then 2 bytes per row,
+// top-to-bottom, drawn upward from y. All entity sprites in Atic Atac use
+// this 2-byte-wide format.
+func (g *GameEnv) paintEntityAttr(x, y int, spr []byte, attr byte) {
+	g.buf.StampSpriteAttr(x, y, spr, attr)
 }
 
 func (g *GameEnv) drawEntities() {
@@ -2282,7 +2581,7 @@ func (g *GameEnv) drawEntities() {
 				spr = f2
 			}
 			g.buf.DrawSpriteXOR(e.X, e.Y, spr)
-			g.paintEntityAttr(e.X, e.Y, 2, int(spr[0]), e.Attr)
+			g.paintEntityAttr(e.X, e.Y, spr, e.Attr)
 
 		case entity.TypeExplosion:
 			e.Timer--
@@ -2306,7 +2605,7 @@ func (g *GameEnv) drawEntities() {
 				addr := data.GenSpriteTable[group][frame]
 				if spr := data.GenMenuIcons[addr]; spr != nil {
 					g.buf.DrawSpriteXOR(e.X, e.Y, spr)
-					g.paintEntityAttr(e.X, e.Y, 2, int(spr[0]), e.Attr)
+					g.paintEntityAttr(e.X, e.Y, spr, e.Attr)
 				}
 			}
 			e.Frame--
@@ -2329,7 +2628,7 @@ func (g *GameEnv) drawEntities() {
 				addr := data.GenSpriteTable[group][frame]
 				if spr := data.GenMenuIcons[addr]; spr != nil {
 					g.buf.DrawSpriteXOR(e.X, e.Y, spr)
-					g.paintEntityAttr(e.X, e.Y, 2, int(spr[0]), e.Attr)
+					g.paintEntityAttr(e.X, e.Y, spr, e.Attr)
 				}
 			}
 
@@ -2345,7 +2644,7 @@ func (g *GameEnv) drawEntities() {
 				addr := data.GenSpriteTable[group][frame]
 				if spr := data.GenMenuIcons[addr]; spr != nil {
 					g.buf.DrawSpriteXOR(e.X, e.Y, spr)
-					g.paintEntityAttr(e.X, e.Y, 2, int(spr[0]), e.Attr)
+					g.paintEntityAttr(e.X, e.Y, spr, e.Attr)
 				}
 			}
 		}
@@ -2438,16 +2737,16 @@ func (g *GameEnv) drawDecorations() {
 		rt := g.getDoorType(g.room, ei)
 		if rt != 0 {
 			// Runtime type overrides original — use it for rendering.
-			// Open doors ($02, $21, $23) use horseshoe arch sprite.
-			// Closed doors ($20, $22) use solid door sprite.
-			if rt == 0x02 || (rt >= 0x20 && rt&0x01 != 0) {
-				// Open: use horseshoe arch (gfxIdx based on original type)
-				// For locked doors opened permanently, use type $02's gfx
+			if rt == 0x18 || rt == 0x19 {
+				// Trap door: $18=closed (gfx 23), $19=open (gfx 24)
+				gfxIdx = int(rt) - 1
+			} else if rt == 0x02 || (rt >= 0x20 && rt&0x01 != 0) {
+				// Open door: horseshoe arch sprite
 				if typeID >= 0x08 && typeID <= 0x0F {
-					gfxIdx = 1 // horseshoe arch (type $02 - 1)
+					gfxIdx = 1 // type $02 - 1
 				}
 			} else if rt >= 0x20 && rt&0x01 == 0 {
-				// Closed: use door_shut sprite
+				// Closed door: solid door sprite
 				gfxIdx = 31
 			}
 		} else if typeID == 0x01 || typeID == 0x02 {
@@ -2577,7 +2876,7 @@ func paintDecoAttrs(buf *screen.Buffer, startCol, startRow, aw, ah int,
 			cellCol := startCol + inner
 			cellRow := startRow - outer
 			if cellCol >= 0 && cellCol < 24 && cellRow >= 0 && cellRow < 24 {
-				buf.Attrs[cellRow*32+cellCol] = av
+				buf.SetCellAttr(cellCol, cellRow, av)
 			}
 		}
 	}
@@ -2819,7 +3118,7 @@ func (g *GameEnv) drawWeapon() {
 	}
 
 	g.buf.DrawSpriteXOR(g.weaponX, g.weaponY, spr)
-	g.paintEntityAttr(g.weaponX, g.weaponY, 2, int(spr[0]), weaponAttr)
+	g.paintEntityAttr(g.weaponX, g.weaponY, spr, weaponAttr)
 }
 
 func (g *GameEnv) drawDoors() {
@@ -2926,7 +3225,14 @@ func (g *GameEnv) drawHUD() {
 	g.buf.FillAttrArea(25, 9, 6, 1, 0x45) // SCORE label: cyan
 	g.buf.FillAttrArea(25, 10, 6, 1, 0x47) // score value: white
 	g.buf.FillAttrArea(25, 11, 6, 4, 0x46) // chicken: yellow
-	g.buf.FillAttrArea(25, 15, 6, 3, 0x47) // lives: white
+	// Lives colour: red if immunity, cyan if infinite lives, white normally
+	livesAttr := byte(0x47) // bright white
+	if g.immunity {
+		livesAttr = 0x42 // bright red
+	} else if g.infiniteLives {
+		livesAttr = 0x45 // bright cyan
+	}
+	g.buf.FillAttrArea(25, 15, 6, 3, livesAttr)
 
 	// Time digits (row 8, Y=64) — custom game font from $BF4C
 	cs := &data.GenCharset
@@ -2984,7 +3290,7 @@ func (g *GameEnv) drawHUD() {
 				if attr == 0 {
 					attr = 0x47 // default bright white
 				}
-				g.paintEntityAttr(ix, 44, 2, int(spr[0]), attr)
+				g.paintEntityAttr(ix, 44, spr, attr)
 			}
 		}
 	}

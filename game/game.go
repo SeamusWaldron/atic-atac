@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/seamuswaldron/aticatac/audio"
 	"github.com/seamuswaldron/aticatac/data"
 	"github.com/seamuswaldron/aticatac/engine"
 	"github.com/seamuswaldron/aticatac/input"
@@ -23,6 +24,7 @@ const (
 // Game is the Ebitengine wrapper around the headless engine.
 type Game struct {
 	eng    *engine.GameEnv
+	snd    *audio.Player
 	img    *ebiten.Image
 	pixels []byte
 	result engine.StepResult
@@ -33,12 +35,15 @@ type Game struct {
 	nWasPressed     bool
 	pWasPressed     bool
 	starWasPressed  bool
+	escWasPressed   bool
 	keyJumpPressed  bool
 	keyJumpIdx      int
 	pausePressed       bool
 	paused             bool
 	lastPassagePressed bool
 	passageJumpIdx     int
+	debugMap           DebugMap
+	debugMapPressed    bool
 	lastKeys           [3]bool
 }
 
@@ -46,8 +51,10 @@ type Game struct {
 func New() *Game {
 	g := &Game{
 		eng:    engine.New(),
+		snd:    audio.NewPlayer(),
 		img:    ebiten.NewImage(screenW, screenH),
 		pixels: make([]byte, screenW*screenH*4),
+		menu:   NewMenuState(),
 	}
 	g.result = g.eng.Step(0)
 	return g
@@ -75,6 +82,16 @@ func (g *Game) Update() error {
 
 	shift := ebiten.IsKeyPressed(ebiten.KeyShift)
 
+	// Escape: return to menu
+	escNow := ebiten.IsKeyPressed(ebiten.KeyEscape)
+	if escNow && !g.escWasPressed {
+		g.eng.Reset()
+		g.debugMap.Active = false
+		g.paused = false
+		return nil
+	}
+	g.escWasPressed = escNow
+
 	// Shift+9: toggle pause
 	pauseNow := shift && ebiten.IsKeyPressed(ebiten.KeyDigit9)
 	if pauseNow && !g.pausePressed {
@@ -82,6 +99,42 @@ func (g *Game) Update() error {
 	}
 	g.pausePressed = pauseNow
 	if g.paused {
+		return nil
+	}
+
+	// Shift+6: toggle debug map overlay
+	dmPressed := shift && ebiten.IsKeyPressed(ebiten.KeyDigit6)
+	if dmPressed && !g.debugMapPressed && g.menu.DebugMap {
+		g.debugMap.Active = !g.debugMap.Active
+		if g.debugMap.Active {
+			// Init to current room's floor
+			g.debugMap.Selected = int(g.eng.Room())
+			for i, f := range floors {
+				if g.debugMap.Selected >= f.Start && g.debugMap.Selected < f.End {
+					g.debugMap.Floor = i
+					break
+				}
+			}
+		}
+	}
+	g.debugMapPressed = dmPressed
+
+	// Debug map overlay: handle input and render
+	if g.debugMap.Active {
+		warpTo := UpdateDebugMap(&g.debugMap, g.eng)
+		if warpTo >= 0 {
+			g.room = byte(warpTo)
+			g.eng.ChangeRoom(g.room)
+			fmt.Printf("Debug map: warped to room %02X\n", warpTo)
+		}
+		// Draw overlay directly onto the buffer without calling Step
+		DrawDebugMap(g.eng.Buffer(), &g.debugMap, g.eng)
+		// Update result for the renderer (buffer is already set)
+		g.result = engine.StepResult{
+			Buffer: g.eng.Buffer(),
+			Room:   g.eng.Room(),
+			State:  g.eng.State(),
+		}
 		return nil
 	}
 
@@ -108,7 +161,7 @@ func (g *Game) Update() error {
 	g.pWasPressed = pPressed
 
 	// Shift+0: jump to next key room (debug) — starts with yellow key
-	kjPressed := shift && ebiten.IsKeyPressed(ebiten.KeyDigit0)
+	kjPressed := shift && ebiten.IsKeyPressed(ebiten.KeyDigit0) && g.menu.DebugKeys
 	if kjPressed && !g.keyJumpPressed {
 		info := g.eng.KeyInfo()
 		// Sort: colour keys first (YELLOW, RED, GREEN, CYAN), then ACG
@@ -152,7 +205,7 @@ func (g *Game) Update() error {
 	g.keyJumpPressed = kjPressed
 
 	// Shift+3: debug — cycle through rooms with secret passages for current character
-	s3Pressed := shift && ebiten.IsKeyPressed(ebiten.KeyDigit3)
+	s3Pressed := shift && ebiten.IsKeyPressed(ebiten.KeyDigit3) && g.menu.DebugKeys
 	if s3Pressed && !g.lastPassagePressed {
 		passageType := byte(0)
 		passageName := ""
@@ -219,6 +272,12 @@ func (g *Game) Update() error {
 
 	act := input.ReadAction()
 	g.result = g.eng.Step(act)
+
+	// Play queued sound effects
+	if events := g.eng.DrainSounds(); len(events) > 0 {
+		g.snd.Play(events)
+	}
+
 	return nil
 }
 
