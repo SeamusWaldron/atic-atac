@@ -12,6 +12,7 @@ import (
 	"github.com/seamuswaldron/aticatac/data"
 	"github.com/seamuswaldron/aticatac/engine"
 	"github.com/seamuswaldron/aticatac/input"
+	"github.com/seamuswaldron/aticatac/render3d"
 	"github.com/seamuswaldron/aticatac/screen"
 )
 
@@ -30,6 +31,11 @@ type Game struct {
 	result engine.StepResult
 	room   byte
 	menu   MenuState
+
+	// 3D rendering
+	renderer3d     *render3d.Renderer
+	viewMode3D     bool
+	tabWasPressed  bool
 
 	// Debounce for special keys
 	nWasPressed     bool
@@ -50,11 +56,12 @@ type Game struct {
 // New creates a new Ebitengine game.
 func New() *Game {
 	g := &Game{
-		eng:    engine.New(),
-		snd:    audio.NewPlayer(),
-		img:    ebiten.NewImage(screenW, screenH),
-		pixels: make([]byte, screenW*screenH*4),
-		menu:   NewMenuState(),
+		eng:        engine.New(),
+		snd:        audio.NewPlayer(),
+		img:        ebiten.NewImage(screenW, screenH),
+		pixels:     make([]byte, screenW*screenH*4),
+		menu:       NewMenuState(),
+		renderer3d: render3d.NewRenderer(),
 	}
 	g.result = g.eng.Step(0)
 	return g
@@ -74,6 +81,7 @@ func (g *Game) Update() error {
 		if UpdateMenu(&g.menu, g.eng) {
 			g.eng.StartGame()
 			g.keyJumpIdx = 0
+			g.viewMode3D = g.menu.View3D
 		}
 		DrawMenu(g.eng.Buffer(), &g.menu)
 		g.result = g.eng.Step(0) // get buffer without advancing game
@@ -81,6 +89,13 @@ func (g *Game) Update() error {
 	}
 
 	shift := ebiten.IsKeyPressed(ebiten.KeyShift)
+
+	// Tab: toggle 3D view mode
+	tabNow := ebiten.IsKeyPressed(ebiten.KeyTab)
+	if tabNow && !g.tabWasPressed {
+		g.viewMode3D = !g.viewMode3D
+	}
+	g.tabWasPressed = tabNow
 
 	// Escape: return to menu
 	escNow := ebiten.IsKeyPressed(ebiten.KeyEscape)
@@ -271,7 +286,13 @@ func (g *Game) Update() error {
 	}
 
 	act := input.ReadAction()
+	prevRoom := g.result.Room
 	g.result = g.eng.Step(act)
+
+	// Snap 3D camera on room change to avoid lerp across rooms
+	if g.viewMode3D && g.result.Room != prevRoom {
+		g.renderer3d.SnapCamera(g.result.PlayerX, g.result.PlayerY, g.result.PlayerDir)
+	}
 
 	// Play queued sound effects
 	if events := g.eng.DrainSounds(); len(events) > 0 {
@@ -283,7 +304,24 @@ func (g *Game) Update() error {
 
 // Draw renders the current frame.
 func (g *Game) Draw(scr *ebiten.Image) {
-	screen.RenderToRGBA(g.result.Buffer, g.pixels)
+	if g.viewMode3D && g.result.State == engine.StatePlaying {
+		rs := render3d.RenderState{
+			Room:      g.result.Room,
+			PlayerX:   g.result.PlayerX,
+			PlayerY:   g.result.PlayerY,
+			PlayerDir: g.result.PlayerDir,
+			Entities:  g.eng.Entities(),
+			Doors:     g.eng.RoomDoorsMap(),
+			Frame:     g.eng.Frame(),
+			Score:     g.result.Score,
+			Lives:     g.result.Lives,
+			Energy:    g.result.Energy,
+		}
+		pixels3d := g.renderer3d.Render(rs)
+		copy(g.pixels, pixels3d)
+	} else {
+		screen.RenderToRGBA(g.result.Buffer, g.pixels)
+	}
 	g.img.WritePixels(g.pixels)
 	op := &ebiten.DrawImageOptions{}
 	scr.DrawImage(g.img, op)

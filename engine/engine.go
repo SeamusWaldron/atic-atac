@@ -203,6 +203,27 @@ func (g *GameEnv) Immunity() bool { return g.immunity }
 // InfiniteLives returns whether infinite lives mode is on.
 func (g *GameEnv) InfiniteLives() bool { return g.infiniteLives }
 
+// PlayerX returns the player's X pixel coordinate.
+func (g *GameEnv) PlayerX() byte { return g.playerX }
+
+// PlayerY returns the player's Y pixel coordinate.
+func (g *GameEnv) PlayerY() byte { return g.playerY }
+
+// PlayerDir returns the player's facing direction.
+func (g *GameEnv) PlayerDir() int { return g.playerDir }
+
+// PlayerMoving returns whether the player is currently moving.
+func (g *GameEnv) PlayerMoving() bool { return g.moving }
+
+// Inv returns a copy of the inventory state.
+func (g *GameEnv) Inv() [3]InvSlot { return g.inventory }
+
+// RoomDoorsMap returns the prebuilt room→doors mapping.
+func (g *GameEnv) RoomDoorsMap() map[byte][]data.RoomDoor { return g.roomDoors }
+
+// Frame returns the global frame counter.
+func (g *GameEnv) Frame() uint32 { return g.frame }
+
 // Entities returns the entity pool (for debug overlay).
 func (g *GameEnv) Entities() *entity.Pool { return g.entities }
 
@@ -299,13 +320,16 @@ func (g *GameEnv) Step(act action.Action) StepResult {
 	}
 
 	return StepResult{
-		Buffer:   &g.buf,
-		Score:    g.score,
-		Lives:    g.lives,
-		Energy:   g.energy,
-		Room:     g.room,
-		State:    g.state,
-		GameOver: g.state == StateGameOver || g.state == StateWin,
+		Buffer:    &g.buf,
+		Score:     g.score,
+		Lives:     g.lives,
+		Energy:    g.energy,
+		Room:      g.room,
+		State:     g.state,
+		GameOver:  g.state == StateGameOver || g.state == StateWin,
+		PlayerX:   g.playerX,
+		PlayerY:   g.playerY,
+		PlayerDir: g.playerDir,
 	}
 }
 

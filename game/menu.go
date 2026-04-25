@@ -17,8 +17,9 @@ type MenuState struct {
 	Immunity      bool // player never loses energy
 	InfiniteLives bool // player has infinite lives
 	ColourClash   bool // authentic ZX Spectrum colour clash (default on)
+	View3D        bool // start in 3D view mode
 	settingsOpen  bool // settings sub-menu active
-	settingSel    int  // selected setting (0-4)
+	settingSel    int  // selected setting (0-5)
 	wasUp         bool
 	wasDown       bool
 	wasEnter      bool
@@ -126,7 +127,7 @@ func drawSettings(buf *screen.Buffer, ms *MenuState) {
 	buf.FillAttrArea(0, 0, 24, 1, 0x47)
 	buf.DrawStringFrom(48, 0, "SETTINGS", cs)
 
-	settings := [5]struct {
+	settings := [6]struct {
 		name string
 		on   bool
 	}{
@@ -135,6 +136,7 @@ func drawSettings(buf *screen.Buffer, ms *MenuState) {
 		{"IMMUNITY", ms.Immunity},
 		{"INFINITE LIVES", ms.InfiniteLives},
 		{"COLOUR CLASH", ms.ColourClash},
+		{"3D VIEW", ms.View3D},
 	}
 
 	for i, s := range settings {
@@ -251,7 +253,7 @@ func UpdateMenu(ms *MenuState, eng *engine.GameEnv) bool {
 
 // updateSettings handles input in the settings sub-menu.
 func updateSettings(ms *MenuState) bool {
-	const numSettings = 5
+	const numSettings = 6
 	// Q = up, A = down
 	up := ebiten.IsKeyPressed(ebiten.KeyQ)
 	if up && !ms.wasUp {
@@ -290,6 +292,8 @@ func updateSettings(ms *MenuState) bool {
 			} else {
 				screen.Mode = screen.ColourModePerPixel
 			}
+		case 5:
+			ms.View3D = !ms.View3D
 		}
 	}
 	ms.wasEnter = enter
