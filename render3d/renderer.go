@@ -62,19 +62,14 @@ func (r *Renderer) Render(s RenderState) []byte {
 	w := r.raster.Width
 	h := r.raster.Height
 
-	// Render walls for current room
+	// Render walls for current room.
+	// No back-face culling — line segment winding is arbitrary (from the 2D
+	// wireframe data), and the Z-buffer handles occlusion correctly.
 	walls := r.wallCache.Walls[s.Room]
 	for i := range walls {
 		q := &walls[i]
 
-		// Back-face culling: skip quads facing away from camera
-		camToQuad := q.Verts[0].Sub(Vec3{r.camera.X, r.camera.Y, r.camera.Z})
-		normal := q.Normal()
-		if normal.Dot(camToQuad) > 0 {
-			continue
-		}
-
-		// Project all 4 vertices
+		// Project all 4 vertices; skip if any behind near plane
 		var sv [4]ScreenVert
 		allVisible := true
 		for j := 0; j < 4; j++ {
@@ -86,17 +81,14 @@ func (r *Renderer) Render(s RenderState) []byte {
 			}
 			sv[j] = ScreenVert{float32(sx), float32(sy), depth}
 		}
-
 		if !allVisible {
-			// Simple near-plane clipping: skip quads with any vertex behind camera.
-			// This is sufficient for room-scale geometry.
 			continue
 		}
 
-		// Fill the quad
+		// Fill the quad with paper (dark) colour — walls are dark surfaces
 		r.raster.FillQuad(sv[0], sv[1], sv[2], sv[3], q.Color)
 
-		// Draw edges (wireframe overlay)
+		// Draw edges in bright ink — wireframe structure on dark walls
 		for j := 0; j < 4; j++ {
 			k := (j + 1) % 4
 			r.raster.DrawLine(

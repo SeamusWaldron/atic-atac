@@ -30,9 +30,12 @@ func PixelToWorld(px, py int) Vec3 {
 // Each line segment in the room frame is extruded into a vertical wall.
 func BuildRoomWalls(style *data.RoomStyle, attr data.RoomAttr) []Quad {
 	ink := attr.Colour & 0x07
+	paper := (attr.Colour >> 3) & 0x07
 	bright := (attr.Colour >> 6) & 0x01
-	fillIdx := ink + bright*8
-	edgeIdx := ink + 8 // always use bright for edges
+	// Walls are dark surfaces with bright wireframe edges — matching the
+	// original look where rooms are black backgrounds with coloured lines.
+	fillIdx := paper + bright*8
+	edgeIdx := ink + bright*8
 
 	var quads []Quad
 	pts := style.Points
