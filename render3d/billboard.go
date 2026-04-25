@@ -66,19 +66,27 @@ func RenderSpriteBillboard(r *Raster, cam *Camera, e *entity.Entity, screenW, sc
 	// Billboard centre Y — sprites are drawn from bottom-up, centre at mid-height
 	centreY := worldH / 2
 
-	// Project top-left and bottom-right of the billboard to get screen extent
-	topLeft := Vec3{cs.X - worldW/2, centreY + worldH/2, cs.Z}
-	botRight := Vec3{cs.X + worldW/2, centreY - worldH/2, cs.Z}
+	// Project two corners of the billboard to get screen extent
+	c0 := Vec3{cs.X - worldW/2, centreY + worldH/2, cs.Z}
+	c1 := Vec3{cs.X + worldW/2, centreY - worldH/2, cs.Z}
 
-	sx0, sy0, _, vis0 := cam.Project(topLeft, screenW, screenH)
-	sx1, sy1, _, vis1 := cam.Project(botRight, screenW, screenH)
+	px0, py0, _, vis0 := cam.Project(c0, screenW, screenH)
+	px1, py1, _, vis1 := cam.Project(c1, screenW, screenH)
 	if !vis0 || !vis1 {
 		return
 	}
 
-	// Screen rectangle for the billboard
-	screenSprW := sx1 - sx0
-	screenSprH := sy1 - sy0
+	// Ensure correct screen ordering
+	if px0 > px1 {
+		px0, px1 = px1, px0
+	}
+	if py0 > py1 {
+		py0, py1 = py1, py0
+	}
+	sx0, sy0 := px0, py0
+
+	screenSprW := px1 - px0
+	screenSprH := py1 - py0
 	if screenSprW <= 0 || screenSprH <= 0 {
 		return
 	}
@@ -163,17 +171,26 @@ func RenderDecoBillboard(r *Raster, cam *Camera, px, py int, sprData []byte, att
 	worldH := float32(height) / coordScale
 
 	centreY := worldH / 2
-	topLeft := Vec3{cs.X - worldW/2, centreY + worldH/2, cs.Z}
-	botRight := Vec3{cs.X + worldW/2, centreY - worldH/2, cs.Z}
+	corner0 := Vec3{cs.X - worldW/2, centreY + worldH/2, cs.Z}
+	corner1 := Vec3{cs.X + worldW/2, centreY - worldH/2, cs.Z}
 
-	sx0, sy0, _, vis0 := cam.Project(topLeft, screenW, screenH)
-	sx1, sy1, _, vis1 := cam.Project(botRight, screenW, screenH)
+	px0, py0, _, vis0 := cam.Project(corner0, screenW, screenH)
+	px1, py1, _, vis1 := cam.Project(corner1, screenW, screenH)
 	if !vis0 || !vis1 {
 		return
 	}
 
-	screenSprW := sx1 - sx0
-	screenSprH := sy1 - sy0
+	// Ensure correct screen ordering regardless of projection flip
+	if px0 > px1 {
+		px0, px1 = px1, px0
+	}
+	if py0 > py1 {
+		py0, py1 = py1, py0
+	}
+	sx0, sy0 := px0, py0
+
+	screenSprW := px1 - px0
+	screenSprH := py1 - py0
 	if screenSprW <= 0 || screenSprH <= 0 {
 		return
 	}
