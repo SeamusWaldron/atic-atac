@@ -125,7 +125,9 @@ func RenderSpriteBillboard(r *Raster, cam *Camera, e *entity.Entity, screenW, sc
 
 // RenderDecoBillboard draws a room decoration as a camera-facing billboard.
 // Decoration sprite format: [widthBytes, height, ...pixels] where width is in bytes (×8 for pixels).
-func RenderDecoBillboard(r *Raster, cam *Camera, px, py int, sprData []byte, attr byte, screenW, screenH int) {
+// attrData is the per-cell attribute grid: [widthCells, heightCells, ...attrs].
+// Each attr byte is a ZX Spectrum colour. 0x00 = transparent, 0xFF = use roomAttr.
+func RenderDecoBillboard(r *Raster, cam *Camera, px, py int, sprData []byte, attrData []byte, roomAttr byte, screenW, screenH int) {
 	if len(sprData) < 2 {
 		return
 	}
@@ -137,16 +139,19 @@ func RenderDecoBillboard(r *Raster, cam *Camera, px, py int, sprData []byte, att
 	}
 	pixels := sprData[2:]
 
+	// Build per-cell colour lookup from attr data
+	var attrW, attrH int
+	var attrs []byte
+	if len(attrData) >= 2 {
+		attrW = int(attrData[0])
+		attrH = int(attrData[1])
+		if len(attrData) >= 2+attrW*attrH {
+			attrs = attrData[2:]
+		}
+	}
+
 	// World position
 	pos := PixelToWorld(px, py)
-
-	// Colour from attribute
-	ink := attr & 0x07
-	bright := (attr >> 6) & 0x01
-	colorIdx := ink + bright*8
-	if colorIdx == 0 {
-		colorIdx = 7
-	}
 
 	cs := cam.WorldToCamera(pos)
 	if cs.Z <= cam.Near {
@@ -173,26 +178,70 @@ func RenderDecoBillboard(r *Raster, cam *Camera, px, py int, sprData []byte, att
 		return
 	}
 
-	for py := 0; py < screenSprH; py++ {
-		sprRow := py * height / screenSprH
+	// Number of 8-pixel-wide character cells
+	widthCells := widthBytes // each byte is 8 pixels = 1 character cell
+	heightCells := (height + 7) / 8
+
+	for spy := 0; spy < screenSprH; spy++ {
+		sprRow := spy * height / screenSprH
 		if sprRow >= height {
 			sprRow = height - 1
 		}
 		rowStart := sprRow * widthBytes
 
-		for px := 0; px < screenSprW; px++ {
-			sprCol := px * widthPx / screenSprW
+		for spx := 0; spx < screenSprW; spx++ {
+			sprCol := spx * widthPx / screenSprW
 			if sprCol >= widthPx {
 				sprCol = widthPx - 1
 			}
 
 			byteIdx := sprCol / 8
 			bitIdx := uint(7 - sprCol%8)
-			if rowStart+byteIdx < len(pixels) && pixels[rowStart+byteIdx]&(1<<bitIdx) != 0 {
-				r.setPixel(sx0+px, sy0+py, cs.Z, colorIdx)
+			if rowStart+byteIdx >= len(pixels) || pixels[rowStart+byteIdx]&(1<<bitIdx) == 0 {
+				continue
 			}
+
+			// Look up per-cell colour from attr data.
+			// Attr grid is painted UPWARD from the sprite's base position:
+			// attr row 0 = bottom cell row, increasing upward.
+			// Sprite row 0 = top of sprite. So we need to invert.
+			cellCol := sprCol / 8
+			cellRow := sprRow / 8
+			// Attr rows go bottom-up; sprite rows go top-down
+			attrRow := heightCells - 1 - cellRow
+
+			colorIdx := attrColorForCell(attrs, attrW, attrH, cellCol, attrRow, widthCells, roomAttr)
+
+			r.setPixel(sx0+spx, sy0+spy, cs.Z, colorIdx)
 		}
 	}
+}
+
+// attrColorForCell returns the palette index for a given cell position.
+func attrColorForCell(attrs []byte, attrW, attrH, cellCol, cellRow, spriteCellW int, roomAttr byte) byte {
+	if attrs == nil || attrW == 0 || attrH == 0 {
+		// No attr data — use room colour
+		ink := roomAttr & 0x07
+		bright := (roomAttr >> 6) & 0x01
+		return ink + bright*8
+	}
+
+	if cellCol >= attrW || cellRow >= attrH || cellCol < 0 || cellRow < 0 {
+		ink := roomAttr & 0x07
+		bright := (roomAttr >> 6) & 0x01
+		return ink + bright*8
+	}
+
+	a := attrs[cellRow*attrW+cellCol]
+	if a == 0x00 {
+		return 7 // transparent → default white
+	}
+	if a == 0xFF {
+		a = roomAttr
+	}
+	ink := a & 0x07
+	bright := (a >> 6) & 0x01
+	return ink + bright*8
 }
 
 // renderBlockBillboard draws a simple coloured square when no sprite data exists.

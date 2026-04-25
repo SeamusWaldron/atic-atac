@@ -94,8 +94,9 @@ func (c *Camera) Project(cs Vec3, screenW, screenH int) (sx, sy int, depth float
 	ndcY := cs.Y / (cs.Z * c.halfW * aspect)
 
 	// NDC to screen: NDC (-1,1) → screen (0, screenW-1)
+	// Y is flipped: positive camera Y (up) → lower screen Y (top of screen)
 	sx = int((ndcX*0.5 + 0.5) * float32(screenW))
-	sy = int((-ndcY*0.5 + 0.5) * float32(screenH))
+	sy = int((ndcY*0.5 + 0.5) * float32(screenH))
 
 	return sx, sy, cs.Z, true
 }

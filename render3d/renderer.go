@@ -168,30 +168,10 @@ func (r *Renderer) renderDecorations(s RenderState, w, h int) {
 			continue
 		}
 
-		// Extract colour from GenDecoAttrs — find the first meaningful
-		// (non-zero, non-transparent) attribute byte
-		colorAttr := decoColor(gfxIdx, roomAttr)
+		// Get per-cell attribute data for multi-colour rendering
+		attrData := data.GenDecoAttrs[gfxIdx] // nil if not present
 
-		RenderDecoBillboard(r.raster, &r.camera, x, y, sprData, colorAttr, w, h)
+		RenderDecoBillboard(r.raster, &r.camera, x, y, sprData, attrData, roomAttr, w, h)
 	}
 }
 
-// decoColor extracts the dominant ZX Spectrum colour attribute for a decoration.
-// Reads from GenDecoAttrs; 0xFF entries use the room attribute, 0x00 is transparent.
-func decoColor(gfxIdx int, roomAttr byte) byte {
-	attrData, ok := data.GenDecoAttrs[gfxIdx]
-	if !ok || len(attrData) < 3 {
-		return roomAttr
-	}
-	// Skip first 2 bytes (width, height), find first non-zero, non-FF attr
-	for _, a := range attrData[2:] {
-		if a == 0x00 {
-			continue // transparent
-		}
-		if a == 0xFF {
-			return roomAttr // use room colour
-		}
-		return a
-	}
-	return roomAttr
-}
