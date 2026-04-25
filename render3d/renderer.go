@@ -55,7 +55,7 @@ func (r *Renderer) Render(s RenderState) []byte {
 	pos := PixelToWorld(int(s.PlayerX), int(s.PlayerY))
 	r.camera.TargetX = pos.X
 	r.camera.TargetZ = pos.Z
-	r.camera.Y = 0.8 // eye height
+	r.camera.Y = 0.5 // eye height (below wall midpoint for more visible wall)
 	r.camera.TargetYaw = DirToYaw(s.PlayerDir)
 	r.camera.Update()
 

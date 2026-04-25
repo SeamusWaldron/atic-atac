@@ -13,8 +13,8 @@ import "github.com/seamuswaldron/aticatac/data"
 const (
 	roomCentreX = 0x60 // 96 — centre of playable area
 	roomCentreY = 0x60 // 96
-	coordScale  = 48.0 // pixels per world unit
-	wallHeight  = 2.0  // world units tall
+	coordScale  = 20.0 // pixels per world unit (lower = walls further away)
+	wallHeight  = 1.5  // world units tall
 )
 
 // PixelToWorld converts a 2D room pixel coordinate to a 3D floor position.
