@@ -13,7 +13,6 @@ type RenderState struct {
 	PlayerY   byte
 	PlayerDir int
 	Entities  *entity.Pool
-	Doors     map[byte][]data.RoomDoor
 	Frame     uint32
 }
 
@@ -66,7 +65,7 @@ func (r *Renderer) Render(s RenderState) []byte {
 	pos := PixelToWorld(int(s.PlayerX), int(s.PlayerY))
 	r.camera.TargetX = pos.X
 	r.camera.TargetZ = pos.Z
-	r.camera.Y = 0.5 // eye height (below wall midpoint for more visible wall)
+	r.camera.Y = 0.5 // eye height
 	r.camera.Update()
 
 	w := r.raster.Width
@@ -119,84 +118,21 @@ func (r *Renderer) Render(s RenderState) []byte {
 		})
 	}
 
-	// Render room decorations (door arches, shields, torches, etc.)
+	// Render ALL room decorations (doors, arches, shields, torches, etc.)
 	r.renderDecorations(s, w, h)
-
-	// Render doors
-	r.renderDoors(s, w, h)
 
 	// Convert to RGBA (HUD is drawn by the 2D renderer, not here)
 	r.raster.ToRGBA(r.rgbaOut)
 	return r.rgbaOut
 }
 
-// renderDoors draws doors as coloured markers on walls.
-func (r *Renderer) renderDoors(s RenderState, w, h int) {
-	doors := s.Doors[s.Room]
-	for _, d := range doors {
-		pos := PixelToWorld(int(d.X), int(d.Y))
-
-		// Door colour based on type
-		var colorIdx byte
-		switch data.DoorType(d.Type) {
-		case data.DoorRed, data.DoorRedC:
-			colorIdx = 10 // bright red
-		case data.DoorGreen, data.DoorGreenC:
-			colorIdx = 12 // bright green
-		case data.DoorCyan, data.DoorCyanC:
-			colorIdx = 13 // bright cyan
-		case data.DoorYellow:
-			colorIdx = 14 // bright yellow
-		case data.DoorBlue:
-			colorIdx = 9 // bright blue
-		default:
-			colorIdx = 15 // bright white
-		}
-
-		// Draw as a small billboard
-		halfW := float32(0.25)
-		halfH := float32(0.6)
-
-		cs := r.camera.WorldToCamera(pos)
-		if cs.Z <= r.camera.Near {
-			continue
-		}
-
-		corners := [4]Vec3{
-			{cs.X - halfW, -halfH, cs.Z},
-			{cs.X + halfW, -halfH, cs.Z},
-			{cs.X + halfW, halfH, cs.Z},
-			{cs.X - halfW, halfH, cs.Z},
-		}
-
-		var sv [4]ScreenVert
-		allVis := true
-		for j := 0; j < 4; j++ {
-			sx, sy, depth, vis := r.camera.Project(corners[j], w, h)
-			if !vis {
-				allVis = false
-				break
-			}
-			sv[j] = ScreenVert{float32(sx), float32(sy), depth}
-		}
-		if !allVis {
-			continue
-		}
-
-		// Draw door outline
-		for j := 0; j < 4; j++ {
-			k := (j + 1) % 4
-			r.raster.DrawLine(
-				int(sv[j].X), int(sv[j].Y), sv[j].Depth,
-				int(sv[k].X), int(sv[k].Y), sv[k].Depth,
-				colorIdx,
-			)
-		}
-	}
-}
-
-// renderDecorations draws room decorations (door arches, shields, torches, etc.) as billboards.
+// renderDecorations draws ALL room decorations as billboards.
+// This includes door arches, shields, torches, bookcases, barrels, etc.
+// Colour is extracted from GenDecoAttrs (the attribute painting data),
+// NOT from the entity flags byte which contains rotation/blend mode.
 func (r *Renderer) renderDecorations(s RenderState, w, h int) {
+	roomAttr := data.RoomAttrs[s.Room].Colour
+
 	entities := data.GenRoomEntityData[int(s.Room)]
 	for _, pair := range entities {
 		// Find the side matching this room
@@ -212,13 +148,7 @@ func (r *Renderer) renderDecorations(s RenderState, w, h int) {
 		typeID := int(e[0])
 		x := int(e[3])
 		y := int(e[4])
-		attr := e[5]
 
-		// Skip door types (0x01-0x0F) — rendered by renderDoors
-		if typeID >= 0x01 && typeID <= 0x0F {
-			continue
-		}
-		// Skip invalid types
 		if typeID <= 0 || typeID > 0x26 {
 			continue
 		}
@@ -228,12 +158,40 @@ func (r *Renderer) renderDecorations(s RenderState, w, h int) {
 		if gfxIdx < 0 || gfxIdx >= 39 {
 			continue
 		}
+		// Skip chicken sprites (HUD energy bar, not room decor)
+		if gfxIdx == 18 || gfxIdx == 19 {
+			continue
+		}
+
 		sprData, ok := data.GenDecoSprites[gfxIdx]
 		if !ok || len(sprData) < 2 {
 			continue
 		}
 
-		RenderDecoBillboard(r.raster, &r.camera, x, y, sprData, attr, w, h)
+		// Extract colour from GenDecoAttrs — find the first meaningful
+		// (non-zero, non-transparent) attribute byte
+		colorAttr := decoColor(gfxIdx, roomAttr)
+
+		RenderDecoBillboard(r.raster, &r.camera, x, y, sprData, colorAttr, w, h)
 	}
 }
 
+// decoColor extracts the dominant ZX Spectrum colour attribute for a decoration.
+// Reads from GenDecoAttrs; 0xFF entries use the room attribute, 0x00 is transparent.
+func decoColor(gfxIdx int, roomAttr byte) byte {
+	attrData, ok := data.GenDecoAttrs[gfxIdx]
+	if !ok || len(attrData) < 3 {
+		return roomAttr
+	}
+	// Skip first 2 bytes (width, height), find first non-zero, non-FF attr
+	for _, a := range attrData[2:] {
+		if a == 0x00 {
+			continue // transparent
+		}
+		if a == 0xFF {
+			return roomAttr // use room colour
+		}
+		return a
+	}
+	return roomAttr
+}

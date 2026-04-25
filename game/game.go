@@ -337,7 +337,6 @@ func (g *Game) Draw(scr *ebiten.Image) {
 			PlayerY:   g.result.PlayerY,
 			PlayerDir: g.result.PlayerDir,
 			Entities:  g.eng.Entities(),
-			Doors:     g.eng.RoomDoorsMap(),
 			Frame:     g.eng.Frame(),
 		}
 		pixels3d := g.renderer3d.Render(rs)
