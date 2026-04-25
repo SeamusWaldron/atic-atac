@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"math"
 	"os"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/seamuswaldron/aticatac/action"
 	"github.com/seamuswaldron/aticatac/audio"
 	"github.com/seamuswaldron/aticatac/data"
 	"github.com/seamuswaldron/aticatac/engine"
@@ -33,9 +35,13 @@ type Game struct {
 	menu   MenuState
 
 	// 3D rendering
-	renderer3d     *render3d.Renderer
-	viewMode3D     bool
-	tabWasPressed  bool
+	renderer3d        *render3d.Renderer
+	viewMode3D        bool
+	tabWasPressed     bool
+	cameraYaw         float32 // independent camera yaw in 3D mode (radians)
+	lastLeftPressed   bool    // debounce for turn keys
+	lastRightPressed  bool
+	lastDownPressed   bool
 
 	// Debounce for special keys
 	nWasPressed     bool
@@ -82,6 +88,10 @@ func (g *Game) Update() error {
 			g.eng.StartGame()
 			g.keyJumpIdx = 0
 			g.viewMode3D = g.menu.View3D
+			if g.viewMode3D {
+				g.cameraYaw = render3d.DirToYaw(data.DirDown)
+				g.renderer3d.SetCameraYaw(g.cameraYaw)
+			}
 		}
 		DrawMenu(g.eng.Buffer(), &g.menu)
 		g.result = g.eng.Step(0) // get buffer without advancing game
@@ -94,6 +104,12 @@ func (g *Game) Update() error {
 	tabNow := ebiten.IsKeyPressed(ebiten.KeyTab)
 	if tabNow && !g.tabWasPressed {
 		g.viewMode3D = !g.viewMode3D
+		if g.viewMode3D {
+			// Initialize camera yaw from current player direction
+			g.cameraYaw = render3d.DirToYaw(g.result.PlayerDir)
+			g.renderer3d.SetCameraYaw(g.cameraYaw)
+			g.renderer3d.SnapCamera(g.result.PlayerX, g.result.PlayerY, g.result.PlayerDir)
+		}
 	}
 	g.tabWasPressed = tabNow
 
@@ -285,13 +301,19 @@ func (g *Game) Update() error {
 		}
 	}
 
-	act := input.ReadAction()
+	var act action.Action
+	if g.viewMode3D {
+		act = g.read3DAction()
+	} else {
+		act = input.ReadAction()
+	}
 	prevRoom := g.result.Room
 	g.result = g.eng.Step(act)
 
 	// Snap 3D camera on room change to avoid lerp across rooms
 	if g.viewMode3D && g.result.Room != prevRoom {
 		g.renderer3d.SnapCamera(g.result.PlayerX, g.result.PlayerY, g.result.PlayerDir)
+		g.cameraYaw = g.renderer3d.CameraYaw()
 	}
 
 	// Play queued sound effects
@@ -341,6 +363,97 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 // ScreenSize returns the window dimensions.
 func ScreenSize() (int, int) {
 	return screenW * scale, screenH * scale
+}
+
+// read3DAction handles input in 3D mode.
+// Left/Right turn the camera. Up/Down move forward/back in the camera's facing direction.
+// Shift modifiers: Shift+Left/Right = 90° turn, Shift+Down = 180° turn.
+func (g *Game) read3DAction() action.Action {
+	var act action.Action
+	shift := ebiten.IsKeyPressed(ebiten.KeyShift)
+
+	// Turning (left/right change camera yaw, debounced)
+	leftNow := ebiten.IsKeyPressed(ebiten.KeyLeft) || ebiten.IsKeyPressed(ebiten.KeyO)
+	rightNow := ebiten.IsKeyPressed(ebiten.KeyRight) || ebiten.IsKeyPressed(ebiten.KeyP)
+	downNow := ebiten.IsKeyPressed(ebiten.KeyDown) || ebiten.IsKeyPressed(ebiten.KeyA)
+
+	if leftNow && !g.lastLeftPressed {
+		if shift {
+			g.cameraYaw += math.Pi / 2 // 90° left
+		} else {
+			g.cameraYaw += math.Pi / 4 // 45° left
+		}
+	}
+	if rightNow && !g.lastRightPressed {
+		if shift {
+			g.cameraYaw -= math.Pi / 2 // 90° right
+		} else {
+			g.cameraYaw -= math.Pi / 4 // 45° right
+		}
+	}
+	if shift && downNow && !g.lastDownPressed {
+		g.cameraYaw += math.Pi // 180° turn
+	}
+	g.lastLeftPressed = leftNow
+	g.lastRightPressed = rightNow
+	g.lastDownPressed = downNow
+
+	// Normalize yaw to [-π, π]
+	for g.cameraYaw > math.Pi {
+		g.cameraYaw -= 2 * math.Pi
+	}
+	for g.cameraYaw < -math.Pi {
+		g.cameraYaw += 2 * math.Pi
+	}
+
+	// Set the camera yaw directly (bypass direction-based targeting)
+	g.renderer3d.SetCameraYaw(g.cameraYaw)
+
+	// Forward/backward movement: translate camera-relative to cardinal direction
+	upNow := ebiten.IsKeyPressed(ebiten.KeyUp) || ebiten.IsKeyPressed(ebiten.KeyQ)
+	if upNow {
+		act |= g.yawToAction(g.cameraYaw)
+	}
+	if downNow && !shift {
+		// Backward = opposite direction
+		act |= g.yawToAction(g.cameraYaw + math.Pi)
+	}
+
+	// Fire and pickup pass through unchanged
+	if ebiten.IsKeyPressed(ebiten.KeySpace) {
+		act |= action.Fire
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyEnter) {
+		act |= action.Pickup
+	}
+
+	return act
+}
+
+// yawToAction converts a camera yaw angle to the nearest cardinal direction action.
+func (g *Game) yawToAction(yaw float32) action.Action {
+	// Normalize
+	for yaw > math.Pi {
+		yaw -= 2 * math.Pi
+	}
+	for yaw < -math.Pi {
+		yaw += 2 * math.Pi
+	}
+
+	// Yaw 0 = looking +Z = "down" in 2D coordinates
+	// π/2 = looking -X = "left"
+	// π = looking -Z = "up"
+	// -π/2 = looking +X = "right"
+	//
+	// Map to nearest cardinal direction
+	if yaw >= -math.Pi/4 && yaw < math.Pi/4 {
+		return action.Down // +Z
+	} else if yaw >= math.Pi/4 && yaw < 3*math.Pi/4 {
+		return action.Left // -X
+	} else if yaw >= -3*math.Pi/4 && yaw < -math.Pi/4 {
+		return action.Right // +X
+	}
+	return action.Up // -Z
 }
 
 // saveScreenshot saves the current frame as a PNG with a descriptive filename.

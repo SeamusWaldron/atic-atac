@@ -123,6 +123,78 @@ func RenderSpriteBillboard(r *Raster, cam *Camera, e *entity.Entity, screenW, sc
 	}
 }
 
+// RenderDecoBillboard draws a room decoration as a camera-facing billboard.
+// Decoration sprite format: [widthBytes, height, ...pixels] where width is in bytes (×8 for pixels).
+func RenderDecoBillboard(r *Raster, cam *Camera, px, py int, sprData []byte, attr byte, screenW, screenH int) {
+	if len(sprData) < 2 {
+		return
+	}
+	widthBytes := int(sprData[0])
+	height := int(sprData[1])
+	widthPx := widthBytes * 8
+	if widthBytes == 0 || height == 0 || len(sprData) < 2+widthBytes*height {
+		return
+	}
+	pixels := sprData[2:]
+
+	// World position
+	pos := PixelToWorld(px, py)
+
+	// Colour from attribute
+	ink := attr & 0x07
+	bright := (attr >> 6) & 0x01
+	colorIdx := ink + bright*8
+	if colorIdx == 0 {
+		colorIdx = 7
+	}
+
+	cs := cam.WorldToCamera(pos)
+	if cs.Z <= cam.Near {
+		return
+	}
+
+	// Billboard size in world units
+	worldW := float32(widthPx) / coordScale
+	worldH := float32(height) / coordScale
+
+	centreY := worldH / 2
+	topLeft := Vec3{cs.X - worldW/2, centreY + worldH/2, cs.Z}
+	botRight := Vec3{cs.X + worldW/2, centreY - worldH/2, cs.Z}
+
+	sx0, sy0, _, vis0 := cam.Project(topLeft, screenW, screenH)
+	sx1, sy1, _, vis1 := cam.Project(botRight, screenW, screenH)
+	if !vis0 || !vis1 {
+		return
+	}
+
+	screenSprW := sx1 - sx0
+	screenSprH := sy1 - sy0
+	if screenSprW <= 0 || screenSprH <= 0 {
+		return
+	}
+
+	for py := 0; py < screenSprH; py++ {
+		sprRow := py * height / screenSprH
+		if sprRow >= height {
+			sprRow = height - 1
+		}
+		rowStart := sprRow * widthBytes
+
+		for px := 0; px < screenSprW; px++ {
+			sprCol := px * widthPx / screenSprW
+			if sprCol >= widthPx {
+				sprCol = widthPx - 1
+			}
+
+			byteIdx := sprCol / 8
+			bitIdx := uint(7 - sprCol%8)
+			if rowStart+byteIdx < len(pixels) && pixels[rowStart+byteIdx]&(1<<bitIdx) != 0 {
+				r.setPixel(sx0+px, sy0+py, cs.Z, colorIdx)
+			}
+		}
+	}
+}
+
 // renderBlockBillboard draws a simple coloured square when no sprite data exists.
 func renderBlockBillboard(r *Raster, cam *Camera, cs Vec3, colorIdx byte, screenW, screenH int) {
 	halfSize := float32(0.3)

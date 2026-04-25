@@ -35,6 +35,17 @@ func NewRenderer() *Renderer {
 	}
 }
 
+// SetCameraYaw sets the camera yaw directly (for 3D input mode).
+func (r *Renderer) SetCameraYaw(yaw float32) {
+	r.camera.Yaw = yaw
+	r.camera.TargetYaw = yaw
+}
+
+// CameraYaw returns the current camera yaw.
+func (r *Renderer) CameraYaw() float32 {
+	return r.camera.Yaw
+}
+
 // SnapCamera instantly sets the camera to the player position (for room transitions).
 func (r *Renderer) SnapCamera(px, py byte, dir int) {
 	pos := PixelToWorld(int(px), int(py))
@@ -51,12 +62,11 @@ func (r *Renderer) SnapCamera(px, py byte, dir int) {
 func (r *Renderer) Render(s RenderState) []byte {
 	r.raster.Clear()
 
-	// Update camera position from player
+	// Update camera position from player (yaw is managed by game layer in 3D mode)
 	pos := PixelToWorld(int(s.PlayerX), int(s.PlayerY))
 	r.camera.TargetX = pos.X
 	r.camera.TargetZ = pos.Z
 	r.camera.Y = 0.5 // eye height (below wall midpoint for more visible wall)
-	r.camera.TargetYaw = DirToYaw(s.PlayerDir)
 	r.camera.Update()
 
 	w := r.raster.Width
@@ -108,6 +118,9 @@ func (r *Renderer) Render(s RenderState) []byte {
 			RenderSpriteBillboard(r.raster, &r.camera, e, w, h)
 		})
 	}
+
+	// Render room decorations (door arches, shields, torches, etc.)
+	r.renderDecorations(s, w, h)
 
 	// Render doors
 	r.renderDoors(s, w, h)
@@ -179,6 +192,48 @@ func (r *Renderer) renderDoors(s RenderState, w, h int) {
 				colorIdx,
 			)
 		}
+	}
+}
+
+// renderDecorations draws room decorations (door arches, shields, torches, etc.) as billboards.
+func (r *Renderer) renderDecorations(s RenderState, w, h int) {
+	entities := data.GenRoomEntityData[int(s.Room)]
+	for _, pair := range entities {
+		// Find the side matching this room
+		var e [8]byte
+		if pair[1] == s.Room {
+			copy(e[:], pair[0:8])
+		} else if pair[9] == s.Room {
+			copy(e[:], pair[8:16])
+		} else {
+			continue
+		}
+
+		typeID := int(e[0])
+		x := int(e[3])
+		y := int(e[4])
+		attr := e[5]
+
+		// Skip door types (0x01-0x0F) — rendered by renderDoors
+		if typeID >= 0x01 && typeID <= 0x0F {
+			continue
+		}
+		// Skip invalid types
+		if typeID <= 0 || typeID > 0x26 {
+			continue
+		}
+
+		// Look up decoration sprite data
+		gfxIdx := typeID - 1
+		if gfxIdx < 0 || gfxIdx >= 39 {
+			continue
+		}
+		sprData, ok := data.GenDecoSprites[gfxIdx]
+		if !ok || len(sprData) < 2 {
+			continue
+		}
+
+		RenderDecoBillboard(r.raster, &r.camera, x, y, sprData, attr, w, h)
 	}
 }
 
