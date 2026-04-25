@@ -15,9 +15,6 @@ type RenderState struct {
 	Entities  *entity.Pool
 	Doors     map[byte][]data.RoomDoor
 	Frame     uint32
-	Score     uint32
-	Lives     byte
-	Energy    byte
 }
 
 // Renderer is the 3D rendering engine.
@@ -34,7 +31,7 @@ func NewRenderer() *Renderer {
 		raster:    NewRaster(),
 		wallCache: BuildWallCache(),
 		camera:    NewCamera(),
-		rgbaOut:   make([]byte, screen.ScreenWidthPx*screen.ScreenHeightPx*4),
+		rgbaOut:   make([]byte, PlayAreaW*screen.ScreenHeightPx*4),
 	}
 }
 
@@ -50,7 +47,7 @@ func (r *Renderer) SnapCamera(px, py byte, dir int) {
 	r.camera.TargetYaw = yaw
 }
 
-// Render produces a 256x192 RGBA frame from the given game state.
+// Render produces a 192x192 RGBA frame covering the play area only.
 func (r *Renderer) Render(s RenderState) []byte {
 	r.raster.Clear()
 
@@ -123,10 +120,7 @@ func (r *Renderer) Render(s RenderState) []byte {
 	// Render doors
 	r.renderDoors(s, w, h)
 
-	// Draw HUD
-	r.renderHUD(s)
-
-	// Convert to RGBA
+	// Convert to RGBA (HUD is drawn by the 2D renderer, not here)
 	r.raster.ToRGBA(r.rgbaOut)
 	return r.rgbaOut
 }
@@ -196,41 +190,3 @@ func (r *Renderer) renderDoors(s RenderState, w, h int) {
 	}
 }
 
-// renderHUD draws score, lives, and energy as a 2D overlay.
-func (r *Renderer) renderHUD(s RenderState) {
-	w := r.raster.Width
-
-	// Energy bar at bottom of screen
-	barY := r.raster.Height - 4
-	barMaxW := 64
-	energyW := int(s.Energy) * barMaxW / 240
-	barStartX := w/2 - barMaxW/2
-
-	for y := barY; y < barY+3; y++ {
-		for x := barStartX; x < barStartX+barMaxW; x++ {
-			if x < 0 || x >= w || y < 0 || y >= r.raster.Height {
-				continue
-			}
-			idx := y*w + x
-			if x-barStartX < energyW {
-				r.raster.ColorBuf[idx] = 12 // bright green
-			} else {
-				r.raster.ColorBuf[idx] = 2 // red
-			}
-			r.raster.ZBuf[idx] = 0 // always on top
-		}
-	}
-
-	// Lives indicators (small blocks at bottom-left)
-	for i := 0; i < int(s.Lives); i++ {
-		for y := barY; y < barY+3; y++ {
-			for x := 4 + i*6; x < 4+i*6+4; x++ {
-				if x >= 0 && x < w && y >= 0 && y < r.raster.Height {
-					idx := y*w + x
-					r.raster.ColorBuf[idx] = 14 // bright yellow
-					r.raster.ZBuf[idx] = 0
-				}
-			}
-		}
-	}
-}

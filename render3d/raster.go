@@ -7,17 +7,21 @@ import (
 	"github.com/seamuswaldron/aticatac/screen"
 )
 
+// PlayAreaW is the width of the playable area (left portion of the screen).
+// The right 64 pixels (columns 24-31) are the HUD panel.
+const PlayAreaW = 192
+
 // Raster is a software rasterizer with a Z-buffer.
-// Renders at 256x192 to match the ZX Spectrum display.
+// Renders at PlayAreaW x 192 (the play area only, not the HUD panel).
 type Raster struct {
 	Width, Height int
 	ColorBuf      []byte    // palette index per pixel (0-15)
 	ZBuf          []float32 // depth per pixel
 }
 
-// NewRaster creates a raster buffer at 256x192.
+// NewRaster creates a raster buffer at 192x192 (play area dimensions).
 func NewRaster() *Raster {
-	w, h := screen.ScreenWidthPx, screen.ScreenHeightPx
+	w, h := PlayAreaW, screen.ScreenHeightPx
 	return &Raster{
 		Width:    w,
 		Height:   h,

@@ -304,6 +304,10 @@ func (g *Game) Update() error {
 
 // Draw renders the current frame.
 func (g *Game) Draw(scr *ebiten.Image) {
+	// Always render the full 2D frame (includes HUD panel on right side)
+	screen.RenderToRGBA(g.result.Buffer, g.pixels)
+
+	// In 3D mode, overwrite only the play area (left 192 columns) with 3D render
 	if g.viewMode3D && g.result.State == engine.StatePlaying {
 		rs := render3d.RenderState{
 			Room:      g.result.Room,
@@ -313,15 +317,17 @@ func (g *Game) Draw(scr *ebiten.Image) {
 			Entities:  g.eng.Entities(),
 			Doors:     g.eng.RoomDoorsMap(),
 			Frame:     g.eng.Frame(),
-			Score:     g.result.Score,
-			Lives:     g.result.Lives,
-			Energy:    g.result.Energy,
 		}
 		pixels3d := g.renderer3d.Render(rs)
-		copy(g.pixels, pixels3d)
-	} else {
-		screen.RenderToRGBA(g.result.Buffer, g.pixels)
+		// Copy only the play area (192 pixels wide) from the 3D buffer
+		// into the full frame, leaving the HUD panel (columns 192-255) intact
+		for y := 0; y < screenH; y++ {
+			srcOff := y * render3d.PlayAreaW * 4
+			dstOff := y * screenW * 4
+			copy(g.pixels[dstOff:dstOff+render3d.PlayAreaW*4], pixels3d[srcOff:srcOff+render3d.PlayAreaW*4])
+		}
 	}
+
 	g.img.WritePixels(g.pixels)
 	op := &ebiten.DrawImageOptions{}
 	scr.DrawImage(g.img, op)
