@@ -5,6 +5,13 @@ import (
 	"github.com/seamuswaldron/aticatac/entity"
 )
 
+// projVert holds a projected vertex with screen coords, depth, and inverse depth.
+type projVert struct {
+	sx, sy int
+	depth  float32
+	invZ   float32 // 1/depth for perspective-correct interpolation
+}
+
 // SpriteLookup returns the raw sprite data for an entity's current graphic.
 // Returns nil if no sprite data is available.
 // Sprite format: first byte = height, then 2 bytes per row (16 pixels wide).
@@ -171,8 +178,9 @@ func WallFromMode(mode int, px, py int) WallDir {
 }
 
 // RenderWallDecoration draws a decoration projected onto its wall surface.
-// Each sprite pixel is individually projected through the camera from its
-// world position on the wall, giving correct perspective automatically.
+// Uses inverse mapping: projects the 4 corners of the sprite quad, then
+// for each screen pixel in the bounding box, computes UV to sample the sprite.
+// This eliminates shredding gaps that forward projection causes.
 func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprData []byte, attrData []byte, roomAttr byte, screenW, screenH int) {
 	if len(sprData) < 2 {
 		return
@@ -183,7 +191,7 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 	if widthBytes == 0 || height == 0 || len(sprData) < 2+widthBytes*height {
 		return
 	}
-	pixels := sprData[2:]
+	sprPixels := sprData[2:]
 
 	// Build per-cell colour lookup
 	var attrW, attrH int
@@ -195,110 +203,169 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 			attrs = attrData[2:]
 		}
 	}
-
 	heightCells := (height + 7) / 8
 
-	// Base position in world coordinates
 	basePos := PixelToWorld(px, py)
+	halfW := float32(widthPx) / 2 / coordScale
+	topY := -float32(height) / coordScale // top of sprite (ceiling direction)
 
-	// For each sprite pixel, compute its world position on the wall and project
-	for row := 0; row < height; row++ {
-		for col := 0; col < widthPx; col++ {
-			byteIdx := col / 8
-			bitIdx := uint(7 - col%8)
-			if pixels[row*widthBytes+byteIdx]&(1<<bitIdx) == 0 {
+	// Build the 4 world-space corners of the sprite quad:
+	// c0=bottom-left, c1=bottom-right, c2=top-right, c3=top-left
+	var corners [4]Vec3
+	switch wall {
+	case WallNorth:
+		corners = [4]Vec3{
+			{basePos.X - halfW, 0, basePos.Z},
+			{basePos.X + halfW, 0, basePos.Z},
+			{basePos.X + halfW, topY, basePos.Z},
+			{basePos.X - halfW, topY, basePos.Z},
+		}
+	case WallSouth:
+		corners = [4]Vec3{
+			{basePos.X + halfW, 0, basePos.Z},
+			{basePos.X - halfW, 0, basePos.Z},
+			{basePos.X - halfW, topY, basePos.Z},
+			{basePos.X + halfW, topY, basePos.Z},
+		}
+	case WallWest:
+		corners = [4]Vec3{
+			{basePos.X, 0, basePos.Z - halfW},
+			{basePos.X, 0, basePos.Z + halfW},
+			{basePos.X, topY, basePos.Z + halfW},
+			{basePos.X, topY, basePos.Z - halfW},
+		}
+	case WallEast:
+		corners = [4]Vec3{
+			{basePos.X, 0, basePos.Z + halfW},
+			{basePos.X, 0, basePos.Z - halfW},
+			{basePos.X, topY, basePos.Z - halfW},
+			{basePos.X, topY, basePos.Z + halfW},
+		}
+	default:
+		// Camera-facing fallback
+		corners = [4]Vec3{
+			{basePos.X - halfW, 0, basePos.Z},
+			{basePos.X + halfW, 0, basePos.Z},
+			{basePos.X + halfW, topY, basePos.Z},
+			{basePos.X - halfW, topY, basePos.Z},
+		}
+	}
+
+	// Project all 4 corners to camera space (need both screen coords and depth)
+	var pv [4]projVert
+	allVis := true
+	for i := 0; i < 4; i++ {
+		cs := cam.WorldToCamera(corners[i])
+		sx, sy, depth, vis := cam.Project(cs, screenW, screenH)
+		if !vis {
+			allVis = false
+			break
+		}
+		pv[i] = projVert{sx, sy, depth, 1.0 / depth}
+	}
+	if !allVis {
+		return
+	}
+
+	// Compute screen bounding box
+	minX, maxX := pv[0].sx, pv[0].sx
+	minY, maxY := pv[0].sy, pv[0].sy
+	for i := 1; i < 4; i++ {
+		if pv[i].sx < minX { minX = pv[i].sx }
+		if pv[i].sx > maxX { maxX = pv[i].sx }
+		if pv[i].sy < minY { minY = pv[i].sy }
+		if pv[i].sy > maxY { maxY = pv[i].sy }
+	}
+	if minX < 0 { minX = 0 }
+	if minY < 0 { minY = 0 }
+	if maxX >= screenW { maxX = screenW - 1 }
+	if maxY >= screenH { maxY = screenH - 1 }
+
+	// For each screen pixel, compute perspective-correct UV using bilinear
+	// interpolation on the projected quad.
+	// UV mapping: u=0..1 left-to-right, v=0..1 top-to-bottom
+	// Corners: c0=BL(u=0,v=1), c1=BR(u=1,v=1), c2=TR(u=1,v=0), c3=TL(u=0,v=0)
+	for sy := minY; sy <= maxY; sy++ {
+		for sx := minX; sx <= maxX; sx++ {
+			// Compute UV via perspective-correct interpolation
+			u, v, depth, inside := quadUV(float32(sx)+0.5, float32(sy)+0.5, pv)
+			if !inside {
 				continue
 			}
 
-			// Compute world position of this pixel on the wall.
-			// Sprite row 0 = top, height-1 = bottom.
-			// Wall Y is negated (0=floor, -wallHeight=ceiling).
-			worldY := -float32(height-row) / coordScale
+			// Map UV to sprite pixel
+			sprCol := int(u * float32(widthPx))
+			sprRow := int(v * float32(height))
+			if sprCol < 0 { sprCol = 0 }
+			if sprRow < 0 { sprRow = 0 }
+			if sprCol >= widthPx { sprCol = widthPx - 1 }
+			if sprRow >= height { sprRow = height - 1 }
 
-			// Horizontal offset: sprite column relative to base position
-			halfW := float32(widthPx) / 2
-			colOffset := (float32(col) - halfW) / coordScale
-
-			var worldPt Vec3
-			switch wall {
-			case WallNorth:
-				// On N wall: sprite spans in X, wall is at base Z
-				worldPt = Vec3{basePos.X + colOffset, worldY, basePos.Z}
-			case WallSouth:
-				// On S wall: sprite spans in X (mirrored), wall at base Z
-				worldPt = Vec3{basePos.X - colOffset, worldY, basePos.Z}
-			case WallWest:
-				// On W wall: sprite spans in Z, wall at base X
-				worldPt = Vec3{basePos.X, worldY, basePos.Z + colOffset}
-			case WallEast:
-				// On E wall: sprite spans in Z (mirrored), wall at base X
-				worldPt = Vec3{basePos.X, worldY, basePos.Z - colOffset}
-			default:
-				// Fallback: camera-facing at base position
-				worldPt = Vec3{basePos.X + colOffset, worldY, basePos.Z}
-			}
-
-			cs := cam.WorldToCamera(worldPt)
-			if cs.Z <= cam.Near {
+			// Check sprite pixel
+			byteIdx := sprCol / 8
+			bitIdx := uint(7 - sprCol%8)
+			if sprPixels[sprRow*widthBytes+byteIdx]&(1<<bitIdx) == 0 {
 				continue
 			}
-			sx, sy, depth, vis := cam.Project(cs, screenW, screenH)
-			if !vis {
-				continue
-			}
-
-			// Project the next pixel position to determine fill size
-			// This prevents "shredding" gaps at steep perspective angles
-			nextColOffset := (float32(col+1) - halfW) / coordScale
-			nextWorldY := -float32(height-row-1) / coordScale
-			var nextPt Vec3
-			switch wall {
-			case WallNorth:
-				nextPt = Vec3{basePos.X + nextColOffset, nextWorldY, basePos.Z}
-			case WallSouth:
-				nextPt = Vec3{basePos.X - nextColOffset, nextWorldY, basePos.Z}
-			case WallWest:
-				nextPt = Vec3{basePos.X, nextWorldY, basePos.Z + nextColOffset}
-			case WallEast:
-				nextPt = Vec3{basePos.X, nextWorldY, basePos.Z - nextColOffset}
-			default:
-				nextPt = Vec3{basePos.X + nextColOffset, nextWorldY, basePos.Z}
-			}
-			ncs := cam.WorldToCamera(nextPt)
-			nx, ny, _, nv := cam.Project(ncs, screenW, screenH)
 
 			// Per-cell colour
-			cellCol := col / 8
-			cellRow := row / 8
+			cellCol := sprCol / 8
+			cellRow := sprRow / 8
 			attrRow := heightCells - 1 - cellRow
 			colorIdx := attrColorForCell(attrs, attrW, attrH, cellCol, attrRow, widthBytes, roomAttr)
 
-			// Fill a rectangle from (sx,sy) to (nx,ny) to cover gaps
-			if nv && ncs.Z > cam.Near {
-				fw := nx - sx
-				fh := ny - sy
-				if fw < 1 {
-					fw = 1
-				}
-				if fh < 1 {
-					fh = 1
-				}
-				if fw > 4 {
-					fw = 4
-				}
-				if fh > 4 {
-					fh = 4
-				}
-				for fy := 0; fy < fh; fy++ {
-					for fx := 0; fx < fw; fx++ {
-						r.setPixel(sx+fx, sy+fy, depth, colorIdx)
-					}
-				}
-			} else {
-				r.setPixel(sx, sy, depth, colorIdx)
-			}
+			r.setPixel(sx, sy, depth, colorIdx)
 		}
 	}
+}
+
+// quadUV computes perspective-correct UV coordinates for a point inside a projected quad.
+// Uses two-triangle decomposition with barycentric coordinates.
+// pv[0]=BL(0,1), pv[1]=BR(1,1), pv[2]=TR(1,0), pv[3]=TL(0,0)
+func quadUV(px, py float32, pv [4]projVert) (u, v, depth float32, inside bool) {
+	// Try triangle 0: TL(3), BL(0), BR(1) — u/v: (0,0),(0,1),(1,1)
+	if u, v, depth, ok := triUV(px, py,
+		float32(pv[3].sx), float32(pv[3].sy), 0, 0, pv[3].invZ,
+		float32(pv[0].sx), float32(pv[0].sy), 0, 1, pv[0].invZ,
+		float32(pv[1].sx), float32(pv[1].sy), 1, 1, pv[1].invZ,
+	); ok {
+		return u, v, depth, true
+	}
+	// Try triangle 1: TL(3), BR(1), TR(2) — u/v: (0,0),(1,1),(1,0)
+	return triUV(px, py,
+		float32(pv[3].sx), float32(pv[3].sy), 0, 0, pv[3].invZ,
+		float32(pv[1].sx), float32(pv[1].sy), 1, 1, pv[1].invZ,
+		float32(pv[2].sx), float32(pv[2].sy), 1, 0, pv[2].invZ,
+	)
+}
+
+// triUV computes perspective-correct UV for point (px,py) inside triangle (ax,ay)-(bx,by)-(cx,cy).
+func triUV(px, py, ax, ay, au, av, ainvz, bx, by, bu, bv, binvz, cx, cy, cu, cv, cinvz float32) (u, v, depth float32, inside bool) {
+	// Barycentric coordinates
+	denom := (by-cy)*(ax-cx) + (cx-bx)*(ay-cy)
+	if denom == 0 {
+		return 0, 0, 0, false
+	}
+	inv := 1.0 / denom
+	w0 := ((by-cy)*(px-cx) + (cx-bx)*(py-cy)) * inv
+	w1 := ((cy-ay)*(px-cx) + (ax-cx)*(py-cy)) * inv
+	w2 := 1.0 - w0 - w1
+
+	if w0 < -0.001 || w1 < -0.001 || w2 < -0.001 {
+		return 0, 0, 0, false
+	}
+
+	// Perspective-correct interpolation
+	invZ := w0*ainvz + w1*binvz + w2*cinvz
+	if invZ <= 0 {
+		return 0, 0, 0, false
+	}
+	z := 1.0 / invZ
+
+	u = (w0*au*ainvz + w1*bu*binvz + w2*cu*cinvz) * z
+	v = (w0*av*ainvz + w1*bv*binvz + w2*cv*cinvz) * z
+
+	return u, v, z, true
 }
 
 // attrColorForCell returns the palette index for a given cell position.
