@@ -219,31 +219,35 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, moun
 	}
 	heightCells := (height + 7) / 8
 
-	// Detect first/last rows with any pixels (skip purely empty rows at edges)
+	// Detect rows with substantial content (≥ 25% of width filled, min 3 pixels).
+	// This skips sparse top/bottom rows like the ACG door's sparse leg-tip rows
+	// 4-7 which would otherwise leave the dense door body floating above the
+	// floor. The dense body anchors directly to the floor.
+	threshold := widthPx / 4
+	if threshold < 3 {
+		threshold = 3
+	}
+	rowDensity := func(r int) int {
+		count := 0
+		for b := 0; b < widthBytes; b++ {
+			v := sprPixels[r*widthBytes+b]
+			for v != 0 {
+				count += int(v & 1)
+				v >>= 1
+			}
+		}
+		return count
+	}
 	contentBottom := 0
 	contentTop := height
 	for r := 0; r < height; r++ {
-		any := false
-		for b := 0; b < widthBytes; b++ {
-			if sprPixels[r*widthBytes+b] != 0 {
-				any = true
-				break
-			}
-		}
-		if any {
+		if rowDensity(r) >= threshold {
 			contentBottom = r
 			break
 		}
 	}
 	for r := height - 1; r >= 0; r-- {
-		any := false
-		for b := 0; b < widthBytes; b++ {
-			if sprPixels[r*widthBytes+b] != 0 {
-				any = true
-				break
-			}
-		}
-		if any {
+		if rowDensity(r) >= threshold {
 			contentTop = r + 1
 			break
 		}
