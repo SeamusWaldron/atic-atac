@@ -72,11 +72,13 @@ func (c *Camera) WorldToCamera(p Vec3) Vec3 {
 	dx := p.X - c.X
 	dy := p.Y - c.Y
 	dz := p.Z - c.Z
-	// View matrix for left-handed coordinate system (+X east, +Y up, +Z south).
-	// Camera basis at yaw θ: forward F=(-sin θ, 0, cos θ), right R=(cos θ, 0, -sin θ).
+	// View matrix for left-handed coords (+X east, +Y up, +Z south).
+	// Camera basis at yaw θ:
+	//   forward F = (-sin θ, 0, cos θ)
+	//   right   R = F × U = (-cos θ, 0, -sin θ)  [right when facing south is west]
 	// csX = R · (P-C), csZ = F · (P-C)
 	return Vec3{
-		X: dx*c.cosYaw - dz*c.sinYaw,
+		X: -dx*c.cosYaw - dz*c.sinYaw,
 		Y: dy,
 		Z: -dx*c.sinYaw + dz*c.cosYaw,
 	}
