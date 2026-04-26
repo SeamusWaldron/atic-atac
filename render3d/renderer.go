@@ -80,6 +80,35 @@ func (r *Renderer) Render(s RenderState) []byte {
 	w := r.raster.Width
 	h := r.raster.Height
 
+	// DEBUG: Draw green dot at projected FLOOR and red dot at projected CEILING
+	// of a point 3 units directly in front of the camera
+	{
+		fwd := Vec3{r.camera.X + 3*r.camera.sinYaw, 0, r.camera.Z + 3*r.camera.cosYaw}
+		// Floor point (Y=0)
+		csF := r.camera.WorldToCamera(Vec3{fwd.X, 0, fwd.Z})
+		sxF, syF, _, visF := r.camera.Project(csF, w, h)
+		if visF {
+			for dy := -2; dy <= 2; dy++ {
+				for dx := -2; dx <= 2; dx++ {
+					r.raster.setPixel(sxF+dx, syF+dy, 0.01, 4) // green = floor
+				}
+			}
+		}
+		// Ceiling point (Y=1.5)
+		csC := r.camera.WorldToCamera(Vec3{fwd.X, 1.5, fwd.Z})
+		sxC, syC, _, visC := r.camera.Project(csC, w, h)
+		if visC {
+			for dy := -2; dy <= 2; dy++ {
+				for dx := -2; dx <= 2; dx++ {
+					r.raster.setPixel(sxC+dx, syC+dy, 0.01, 2) // red = ceiling
+				}
+			}
+		}
+		if r.debugFrame%50 == 1 && visF && visC {
+			fmt.Printf("  DEBUG: floor_sy=%d ceiling_sy=%d (centre=%d)\n", syF, syC, h/2)
+		}
+	}
+
 	// Render walls for current room.
 	// No back-face culling — line segment winding is arbitrary (from the 2D
 	// wireframe data), and the Z-buffer handles occlusion correctly.
