@@ -239,6 +239,9 @@ func (r *Renderer) Render(s RenderState) []byte {
 	}
 	r.renderDecorations(s, w, h)
 
+	// Render floor decorations (trap doors)
+	r.renderFloorDecorations(s, w, h)
+
 	// Convert to RGBA (HUD is drawn by the 2D renderer, not here)
 	r.raster.ToRGBA(r.rgbaOut)
 	return r.rgbaOut
@@ -294,6 +297,12 @@ func (r *Renderer) renderDecorations(s RenderState, w, h int) {
 		mode := (int(e[5]) >> 5) & 0x07
 
 		if typeID <= 0 || typeID > 0x26 {
+			continue
+		}
+
+		// Skip floor-only decorations (trap doors). They shouldn't render as
+		// wall decorations. TODO: render them flat on the floor.
+		if typeID == 0x18 || typeID == 0x19 {
 			continue
 		}
 
@@ -429,4 +438,97 @@ func decorationMount(typeID int) MountType {
 	}
 	// Everything else (portraits, shields, torches, ghosts, food, etc.) hangs on wall
 	return MountWallHung
+}
+
+// renderFloorDecorations draws decorations that lie flat on the floor
+// (trap doors). Each decoration is rendered as a small horizontal quad
+// at floor level (Y=0).
+func (r *Renderer) renderFloorDecorations(s RenderState, w, h int) {
+	roomAttr := data.RoomAttrs[s.Room].Colour
+	entities := data.GenRoomEntityData[int(s.Room)]
+	for _, pair := range entities {
+		var e [8]byte
+		if pair[1] == s.Room {
+			copy(e[:], pair[0:8])
+		} else if pair[9] == s.Room {
+			copy(e[:], pair[8:16])
+		} else {
+			continue
+		}
+		typeID := int(e[0])
+		// Only trap doors for now
+		if typeID != 0x18 && typeID != 0x19 {
+			continue
+		}
+		x := int(e[3])
+		y := int(e[4])
+		gfxIdx := typeID - 1
+		sprData, ok := data.GenDecoSprites[gfxIdx]
+		if !ok || len(sprData) < 2 {
+			continue
+		}
+		widthBytes := int(sprData[0])
+		spriteH := int(sprData[1])
+		widthPx := widthBytes * 8
+
+		// Build a flat quad on the floor centred at (x+widthPx/2, y-spriteH/2)
+		// (entity y is bottom of displayed sprite in 2D top-down).
+		centreX := x + widthPx/2
+		centreY := y - spriteH/2
+		halfW := float32(widthPx) / 2 / coordScale
+		halfD := float32(spriteH) / 2 / coordScale
+		basePos := PixelToWorld(centreX, centreY)
+
+		// Floor quad corners (Y=0 for all four)
+		corners := [4]Vec3{
+			{basePos.X - halfW, 0.01, basePos.Z + halfD}, // BL (south-west)
+			{basePos.X + halfW, 0.01, basePos.Z + halfD}, // BR (south-east)
+			{basePos.X + halfW, 0.01, basePos.Z - halfD}, // TR (north-east)
+			{basePos.X - halfW, 0.01, basePos.Z - halfD}, // TL (north-west)
+		}
+
+		// Project corners
+		var pv [4]projVert
+		allVis := true
+		for i := 0; i < 4; i++ {
+			cs := r.camera.WorldToCamera(corners[i])
+			if cs.Z <= r.camera.Near {
+				allVis = false
+				break
+			}
+			sx, sy, depth, vis := r.camera.Project(cs, w, h)
+			if !vis {
+				allVis = false
+				break
+			}
+			pv[i] = projVert{sx, sy, depth, 1.0 / depth}
+		}
+		if !allVis {
+			continue
+		}
+
+		// Determine fill colour from room attribute
+		ink := roomAttr & 0x07
+		bright := (roomAttr >> 6) & 0x01
+		colorIdx := ink + bright*8
+		if typeID == 0x19 {
+			// Open trap door: dark hole
+			colorIdx = 0
+		}
+
+		// Fill quad as 2 triangles
+		v0 := ScreenVert{float32(pv[0].sx), float32(pv[0].sy), pv[0].depth - 0.005}
+		v1 := ScreenVert{float32(pv[1].sx), float32(pv[1].sy), pv[1].depth - 0.005}
+		v2 := ScreenVert{float32(pv[2].sx), float32(pv[2].sy), pv[2].depth - 0.005}
+		v3 := ScreenVert{float32(pv[3].sx), float32(pv[3].sy), pv[3].depth - 0.005}
+		r.raster.FillQuad(v0, v1, v2, v3, colorIdx)
+
+		// Draw outline edges
+		edgeColor := byte(2) // red
+		for j := 0; j < 4; j++ {
+			k := (j + 1) % 4
+			r.raster.DrawLine(pv[j].sx, pv[j].sy, pv[j].depth-0.01,
+				pv[k].sx, pv[k].sy, pv[k].depth-0.01, edgeColor)
+		}
+	}
 }
