@@ -47,6 +47,7 @@ type Game struct {
 	nWasPressed     bool
 	pWasPressed     bool
 	starWasPressed  bool
+	plusWasPressed  bool
 	escWasPressed   bool
 	keyJumpPressed  bool
 	keyJumpIdx      int
@@ -75,12 +76,20 @@ func New() *Game {
 
 // Update is called every tick (target: 50 TPS).
 func (g *Game) Update() error {
-	// Screenshot: = key
+	// Screenshot: = key (original) or + key (numpad plus / shift+=)
 	starPressed := ebiten.IsKeyPressed(ebiten.KeyEqual)
-	if starPressed && !g.starWasPressed {
-		g.saveScreenshot()
+	plusPressed := ebiten.IsKeyPressed(ebiten.KeyKPAdd)
+	if (starPressed && !g.starWasPressed) || (plusPressed && !g.plusWasPressed) {
+		filename := g.saveScreenshot()
+		mode := "2D"
+		if g.viewMode3D {
+			mode = "3D"
+		}
+		fmt.Printf("SCREENSHOT [%s]: %s player=(%d,%d) yaw=%.2f room=%d\n",
+			mode, filename, g.result.PlayerX, g.result.PlayerY, g.cameraYaw, g.result.Room)
 	}
 	g.starWasPressed = starPressed
+	g.plusWasPressed = plusPressed
 
 	// Menu state
 	if g.eng.State() == engine.StateMenu {
@@ -456,7 +465,8 @@ func (g *Game) yawToAction(yaw float32) action.Action {
 }
 
 // saveScreenshot saves the current frame as a PNG with a descriptive filename.
-func (g *Game) saveScreenshot() {
+// Returns the filename for logging.
+func (g *Game) saveScreenshot() string {
 	r := g.result
 	state := "playing"
 	switch r.State {
@@ -492,9 +502,9 @@ func (g *Game) saveScreenshot() {
 	f, err := os.Create(filename)
 	if err != nil {
 		fmt.Println("Screenshot failed:", err)
-		return
+		return ""
 	}
 	defer f.Close()
 	png.Encode(f, img)
-	fmt.Println("Screenshot saved:", filename)
+	return filename
 }
