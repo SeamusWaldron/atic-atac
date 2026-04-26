@@ -74,9 +74,9 @@ func (c *Camera) WorldToCamera(p Vec3) Vec3 {
 	dz := p.Z - c.Z
 	// Rotate by -yaw around Y axis
 	return Vec3{
-		X: dx*c.cosYaw + dz*c.sinYaw,
+		X: dx*c.cosYaw - dz*c.sinYaw,
 		Y: dy,
-		Z: -dx*c.sinYaw + dz*c.cosYaw,
+		Z: dx*c.sinYaw + dz*c.cosYaw,
 	}
 }
 
