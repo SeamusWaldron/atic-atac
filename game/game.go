@@ -118,6 +118,15 @@ func (g *Game) Update() error {
 			g.cameraYaw = render3d.DirToYaw(g.result.PlayerDir)
 			g.renderer3d.SetCameraYaw(g.cameraYaw)
 			g.renderer3d.SnapCamera(g.result.PlayerX, g.result.PlayerY, g.result.PlayerDir)
+			dirNames := [4]string{"LEFT", "RIGHT", "UP", "DOWN"}
+			dirName := "?"
+			if g.result.PlayerDir >= 0 && g.result.PlayerDir < 4 {
+				dirName = dirNames[g.result.PlayerDir]
+			}
+			fmt.Printf("ENTER 3D: playerDir=%d (%s) → yaw=%.2f at player=(%d,%d)\n",
+				g.result.PlayerDir, dirName, g.cameraYaw, g.result.PlayerX, g.result.PlayerY)
+		} else {
+			fmt.Println("EXIT 3D")
 		}
 	}
 	g.tabWasPressed = tabNow
