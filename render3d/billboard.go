@@ -209,33 +209,35 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 	}
 	heightCells := (height + 7) / 8
 
-	// Detect first and last rows with actual content. Some sprites (like the
-	// ACG door) have empty rows at the top or bottom which would make the
-	// decoration appear to float. We anchor the VISIBLE content to the wall.
-	contentBottom := 0  // first row with content (sprite row 0 = bottom)
-	contentTop := height // exclusive
-	for r := 0; r < height; r++ {
-		any := false
+	// Detect rows with SIGNIFICANT content. Use a percentage-based threshold
+	// so it scales with sprite width: skip very sparse rows (like the ACG
+	// door's row 4 which has only 8/64 pixels = small bar tips). Anchor the
+	// decoration's main body to the floor.
+	densityThreshold := widthPx / 4 // 25% of width must have pixels
+	if densityThreshold < 3 {
+		densityThreshold = 3
+	}
+	rowDensity := func(r int) int {
+		count := 0
 		for b := 0; b < widthBytes; b++ {
-			if sprPixels[r*widthBytes+b] != 0 {
-				any = true
-				break
+			v := sprPixels[r*widthBytes+b]
+			for v != 0 {
+				count += int(v & 1)
+				v >>= 1
 			}
 		}
-		if any {
+		return count
+	}
+	contentBottom := 0  // first row with significant content (sprite row 0 = bottom)
+	contentTop := height // exclusive
+	for r := 0; r < height; r++ {
+		if rowDensity(r) >= densityThreshold {
 			contentBottom = r
 			break
 		}
 	}
 	for r := height - 1; r >= 0; r-- {
-		any := false
-		for b := 0; b < widthBytes; b++ {
-			if sprPixels[r*widthBytes+b] != 0 {
-				any = true
-				break
-			}
-		}
-		if any {
+		if rowDensity(r) >= densityThreshold {
 			contentTop = r + 1
 			break
 		}
