@@ -70,8 +70,8 @@ func RenderSpriteBillboard(r *Raster, cam *Camera, e *entity.Entity, screenW, sc
 	worldW := float32(sprWidthPx) / coordScale
 	worldH := float32(sprHeight) / coordScale
 
-	// Billboard centre Y — negated to match wall geometry (Y=0 floor, Y<0 ceiling)
-	centreY := -worldH / 2
+	// Billboard centre Y — standard Y-up (positive = up from floor)
+	centreY := worldH / 2
 
 	// Project two corners of the billboard to get screen extent
 	c0 := Vec3{cs.X - worldW/2, centreY - worldH/2, cs.Z}
@@ -207,7 +207,7 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 
 	basePos := PixelToWorld(px, py)
 	halfW := float32(widthPx) / 2 / coordScale
-	topY := -float32(height) / coordScale // top of sprite (ceiling direction)
+	topY := float32(height) / coordScale // top of sprite (standard Y-up)
 
 	// Build the 4 world-space corners of the sprite quad:
 	// c0=bottom-left, c1=bottom-right, c2=top-right, c3=top-left
@@ -399,10 +399,10 @@ func attrColorForCell(attrs []byte, attrW, attrH, cellCol, cellRow, spriteCellW 
 func renderBlockBillboard(r *Raster, cam *Camera, cs Vec3, colorIdx byte, screenW, screenH int) {
 	halfSize := float32(0.3)
 	corners := [4]Vec3{
-		{cs.X - halfSize, -0.2, cs.Z},
-		{cs.X + halfSize, -0.2, cs.Z},
-		{cs.X + halfSize, -0.8, cs.Z},
-		{cs.X - halfSize, -0.8, cs.Z},
+		{cs.X - halfSize, 0.2, cs.Z},
+		{cs.X + halfSize, 0.2, cs.Z},
+		{cs.X + halfSize, 0.8, cs.Z},
+		{cs.X - halfSize, 0.8, cs.Z},
 	}
 
 	var sv [4]ScreenVert
