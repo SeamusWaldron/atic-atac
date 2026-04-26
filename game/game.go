@@ -457,12 +457,43 @@ func (g *Game) read3DAction() action.Action {
 	// sprites face the way the camera is looking.
 	g.eng.SetPlayerDir(g.yawToPlayerDir(g.cameraYaw))
 
-	// Clear lastDX/lastDY so weapon fires from playerDir (camera yaw),
-	// not from stale last-2D-movement direction. The engine will repopulate
-	// these from the action if forward/back is being pressed.
-	g.eng.ClearLastMovement()
+	// Set lastDX/lastDY from camera yaw using 8 octants. The engine's
+	// fireWeapon prefers these (allowing diagonal fire) over playerDir.
+	dx, dy := yawToDelta(g.cameraYaw)
+	g.eng.SetLastMovement(dx, dy)
 
 	return act
+}
+
+// yawToDelta converts a camera yaw to (dx, dy) deltas in the engine's
+// 2D pixel coordinate system, snapped to one of 8 octants:
+// dx > 0 = east, dy > 0 = south.
+func yawToDelta(yaw float32) (int, int) {
+	for yaw > math.Pi {
+		yaw -= 2 * math.Pi
+	}
+	for yaw < -math.Pi {
+		yaw += 2 * math.Pi
+	}
+	// Each octant spans π/4. Boundaries at ±π/8, ±3π/8, ±5π/8, ±7π/8.
+	const eighth = math.Pi / 8
+	switch {
+	case yaw >= -eighth && yaw < eighth:
+		return 0, 1 // south
+	case yaw >= eighth && yaw < 3*eighth:
+		return -1, 1 // SW
+	case yaw >= 3*eighth && yaw < 5*eighth:
+		return -1, 0 // west
+	case yaw >= 5*eighth && yaw < 7*eighth:
+		return -1, -1 // NW
+	case yaw >= -3*eighth && yaw < -eighth:
+		return 1, 1 // SE
+	case yaw >= -5*eighth && yaw < -3*eighth:
+		return 1, 0 // east
+	case yaw >= -7*eighth && yaw < -5*eighth:
+		return 1, -1 // NE
+	}
+	return 0, -1 // north (yaw near ±π)
 }
 
 // yawToPlayerDir converts a camera yaw to the engine's direction constant
@@ -496,20 +527,27 @@ func (g *Game) yawToAction(yaw float32) action.Action {
 		yaw += 2 * math.Pi
 	}
 
-	// Yaw 0 = looking +Z = "down" in 2D coordinates
-	// π/2 = looking -X = "left"
-	// π = looking -Z = "up"
-	// -π/2 = looking +X = "right"
-	//
-	// Map to nearest cardinal direction
-	if yaw >= -math.Pi/4 && yaw < math.Pi/4 {
-		return action.Down // +Z
-	} else if yaw >= math.Pi/4 && yaw < 3*math.Pi/4 {
-		return action.Left // -X
-	} else if yaw >= -3*math.Pi/4 && yaw < -math.Pi/4 {
-		return action.Right // +X
+	// 8 octants, each spanning π/4. Use diagonal combinations for diagonal
+	// yaw so the engine sets lastDX/lastDY diagonally — enabling diagonal
+	// weapon fire.
+	const eighth = math.Pi / 8
+	switch {
+	case yaw >= -eighth && yaw < eighth:
+		return action.Down // S
+	case yaw >= eighth && yaw < 3*eighth:
+		return action.Down | action.Left // SW
+	case yaw >= 3*eighth && yaw < 5*eighth:
+		return action.Left // W
+	case yaw >= 5*eighth && yaw < 7*eighth:
+		return action.Up | action.Left // NW
+	case yaw >= -3*eighth && yaw < -eighth:
+		return action.Down | action.Right // SE
+	case yaw >= -5*eighth && yaw < -3*eighth:
+		return action.Right // E
+	case yaw >= -7*eighth && yaw < -5*eighth:
+		return action.Up | action.Right // NE
 	}
-	return action.Up // -Z
+	return action.Up // N
 }
 
 // saveScreenshot saves the current frame as a PNG with a descriptive filename.
