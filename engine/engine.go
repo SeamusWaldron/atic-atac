@@ -212,6 +212,10 @@ func (g *GameEnv) PlayerY() byte { return g.playerY }
 // PlayerDir returns the player's facing direction.
 func (g *GameEnv) PlayerDir() int { return g.playerDir }
 
+// SetPlayerDir sets the player's facing direction (used by 3D mode to
+// keep the weapon aim aligned with the camera yaw).
+func (g *GameEnv) SetPlayerDir(dir int) { g.playerDir = dir }
+
 // PlayerMoving returns whether the player is currently moving.
 func (g *GameEnv) PlayerMoving() bool { return g.moving }
 

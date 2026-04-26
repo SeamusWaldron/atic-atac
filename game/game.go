@@ -447,7 +447,32 @@ func (g *Game) read3DAction() action.Action {
 		act |= action.Pickup
 	}
 
+	// Sync engine's player direction with camera yaw so weapons fire and
+	// sprites face the way the camera is looking.
+	g.eng.SetPlayerDir(g.yawToPlayerDir(g.cameraYaw))
+
 	return act
+}
+
+// yawToPlayerDir converts a camera yaw to the engine's direction constant
+// (DirLeft=0, DirRight=1, DirUp=2, DirDown=3).
+func (g *Game) yawToPlayerDir(yaw float32) int {
+	for yaw > math.Pi {
+		yaw -= 2 * math.Pi
+	}
+	for yaw < -math.Pi {
+		yaw += 2 * math.Pi
+	}
+	if yaw >= -math.Pi/4 && yaw < math.Pi/4 {
+		return data.DirDown // facing +Z (south)
+	}
+	if yaw >= math.Pi/4 && yaw < 3*math.Pi/4 {
+		return data.DirLeft // facing -X (west)
+	}
+	if yaw >= -3*math.Pi/4 && yaw < -math.Pi/4 {
+		return data.DirRight // facing +X (east)
+	}
+	return data.DirUp // facing -Z (north)
 }
 
 // yawToAction converts a camera yaw angle to the nearest cardinal direction action.
