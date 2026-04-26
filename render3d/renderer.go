@@ -355,7 +355,8 @@ func (r *Renderer) renderDecorations(s RenderState, w, h int) {
 				typeID, x, y, drawX, drawY, wallName, mode)
 		}
 
-		RenderWallDecoration(r.raster, &r.camera, drawX, drawY, wall, sprData, attrData, roomAttr, w, h)
+		mount := decorationMount(typeID)
+		RenderWallDecoration(r.raster, &r.camera, drawX, drawY, wall, mount, sprData, attrData, roomAttr, w, h)
 	}
 }
 
@@ -394,3 +395,19 @@ func (r *Renderer) drawClippedEdge(a, b Vec3, color byte, screenW, screenH int) 
 	r.raster.DrawLine(sx0, sy0, d0, sx1, sy1, d1, color)
 }
 
+// decorationMount returns how a decoration type is positioned vertically.
+// Floor-mounted: doors, suits of armour, ACG door (full wall height, anchored at floor)
+// Wall-hung: portraits, shields, torches, small decorations (centred mid-wall)
+func decorationMount(typeID int) MountType {
+	switch typeID {
+	// Door types (0x01-0x0F): floor-mounted
+	case 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+		0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F:
+		return MountFloor
+	// Suit of armour, ACG door, ACG exit
+	case 0x1E, 0x24:
+		return MountFloor
+	}
+	// Everything else (portraits, shields, torches, ghosts, food, etc.) hangs on wall
+	return MountWallHung
+}

@@ -181,11 +181,21 @@ func WallFromMode(mode int, px, py int) WallDir {
 	return WallNone
 }
 
+// MountType describes how a decoration is positioned vertically on its wall.
+type MountType int
+
+const (
+	// MountFloor: decoration's bottom anchored at the floor (doors, suits).
+	MountFloor MountType = iota
+	// MountWallHung: decoration centred vertically on the wall (portraits, shields).
+	MountWallHung
+)
+
 // RenderWallDecoration draws a decoration projected onto its wall surface.
 // Uses inverse mapping: projects the 4 corners of the sprite quad, then
 // for each screen pixel in the bounding box, computes UV to sample the sprite.
 // This eliminates shredding gaps that forward projection causes.
-func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprData []byte, attrData []byte, roomAttr byte, screenW, screenH int) {
+func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, mount MountType, sprData []byte, attrData []byte, roomAttr byte, screenW, screenH int) {
 	if len(sprData) < 2 {
 		return
 	}
@@ -209,35 +219,31 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 	}
 	heightCells := (height + 7) / 8
 
-	// Detect rows with SIGNIFICANT content. Use a percentage-based threshold
-	// so it scales with sprite width: skip very sparse rows (like the ACG
-	// door's row 4 which has only 8/64 pixels = small bar tips). Anchor the
-	// decoration's main body to the floor.
-	densityThreshold := widthPx / 4 // 25% of width must have pixels
-	if densityThreshold < 3 {
-		densityThreshold = 3
-	}
-	rowDensity := func(r int) int {
-		count := 0
+	// Detect first/last rows with any pixels (skip purely empty rows at edges)
+	contentBottom := 0
+	contentTop := height
+	for r := 0; r < height; r++ {
+		any := false
 		for b := 0; b < widthBytes; b++ {
-			v := sprPixels[r*widthBytes+b]
-			for v != 0 {
-				count += int(v & 1)
-				v >>= 1
+			if sprPixels[r*widthBytes+b] != 0 {
+				any = true
+				break
 			}
 		}
-		return count
-	}
-	contentBottom := 0  // first row with significant content (sprite row 0 = bottom)
-	contentTop := height // exclusive
-	for r := 0; r < height; r++ {
-		if rowDensity(r) >= densityThreshold {
+		if any {
 			contentBottom = r
 			break
 		}
 	}
 	for r := height - 1; r >= 0; r-- {
-		if rowDensity(r) >= densityThreshold {
+		any := false
+		for b := 0; b < widthBytes; b++ {
+			if sprPixels[r*widthBytes+b] != 0 {
+				any = true
+				break
+			}
+		}
+		if any {
 			contentTop = r + 1
 			break
 		}
@@ -264,12 +270,25 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 		basePos = PixelToWorld(px+widthPx/2, py)
 	}
 	halfW := float32(widthPx) / 2 / coordScale
-	// Use visible content height (skip empty rows at top/bottom) so the
-	// decoration anchors its actual content to the wall, not blank space.
-	// Then clamp to wall height so it doesn't protrude above the ceiling.
-	topY := float32(visibleHeight) / coordScale
-	if topY > wallHeight {
-		topY = wallHeight
+	// Vertical extent of the visible content in world units
+	contentHeight := float32(visibleHeight) / coordScale
+	if contentHeight > wallHeight {
+		contentHeight = wallHeight
+	}
+
+	// Vertical position depends on mount type:
+	//   MountFloor:    bottom of content at floor (Y=0), top at contentHeight
+	//   MountWallHung: centre vertically on wall (e.g., portraits hung mid-wall)
+	var bottomY, topY float32
+	switch mount {
+	case MountWallHung:
+		// Centre on upper portion of wall, like a hung picture
+		centre := float32(wallHeight * 0.65) // slightly above wall centre
+		bottomY = centre - contentHeight/2
+		topY = centre + contentHeight/2
+	default: // MountFloor
+		bottomY = 0
+		topY = contentHeight
 	}
 
 	// Build the 4 world-space corners of the sprite quad:
@@ -278,39 +297,38 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 	switch wall {
 	case WallNorth:
 		corners = [4]Vec3{
-			{basePos.X - halfW, 0, basePos.Z},
-			{basePos.X + halfW, 0, basePos.Z},
+			{basePos.X - halfW, bottomY, basePos.Z},
+			{basePos.X + halfW, bottomY, basePos.Z},
 			{basePos.X + halfW, topY, basePos.Z},
 			{basePos.X - halfW, topY, basePos.Z},
 		}
 	case WallSouth:
 		corners = [4]Vec3{
-			{basePos.X + halfW, 0, basePos.Z},
-			{basePos.X - halfW, 0, basePos.Z},
+			{basePos.X + halfW, bottomY, basePos.Z},
+			{basePos.X - halfW, bottomY, basePos.Z},
 			{basePos.X - halfW, topY, basePos.Z},
 			{basePos.X + halfW, topY, basePos.Z},
 		}
 	case WallWest:
 		// Player faces -X. Camera left = +Z (south). u=0 should be on camera left.
 		corners = [4]Vec3{
-			{basePos.X, 0, basePos.Z + halfW},     // c0 (u=0) at +Z (south = camera left)
-			{basePos.X, 0, basePos.Z - halfW},     // c1 (u=1) at -Z (north = camera right)
+			{basePos.X, bottomY, basePos.Z + halfW},
+			{basePos.X, bottomY, basePos.Z - halfW},
 			{basePos.X, topY, basePos.Z - halfW},
 			{basePos.X, topY, basePos.Z + halfW},
 		}
 	case WallEast:
 		// Player faces +X. Camera left = -Z (north). u=0 should be on camera left.
 		corners = [4]Vec3{
-			{basePos.X, 0, basePos.Z - halfW},     // c0 (u=0) at -Z (north = camera left)
-			{basePos.X, 0, basePos.Z + halfW},     // c1 (u=1) at +Z (south = camera right)
+			{basePos.X, bottomY, basePos.Z - halfW},
+			{basePos.X, bottomY, basePos.Z + halfW},
 			{basePos.X, topY, basePos.Z + halfW},
 			{basePos.X, topY, basePos.Z - halfW},
 		}
 	default:
-		// Camera-facing fallback
 		corners = [4]Vec3{
-			{basePos.X - halfW, 0, basePos.Z},
-			{basePos.X + halfW, 0, basePos.Z},
+			{basePos.X - halfW, bottomY, basePos.Z},
+			{basePos.X + halfW, bottomY, basePos.Z},
 			{basePos.X + halfW, topY, basePos.Z},
 			{basePos.X - halfW, topY, basePos.Z},
 		}
