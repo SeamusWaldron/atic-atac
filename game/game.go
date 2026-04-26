@@ -349,13 +349,19 @@ func (g *Game) Draw(scr *ebiten.Image) {
 
 	// In 3D mode, overwrite only the play area (left 192 columns) with 3D render
 	if g.viewMode3D && g.result.State == engine.StatePlaying {
+		wActive, wx, wy, wgfx, wattr := g.eng.WeaponState()
 		rs := render3d.RenderState{
-			Room:      g.result.Room,
-			PlayerX:   g.result.PlayerX,
-			PlayerY:   g.result.PlayerY,
-			PlayerDir: g.result.PlayerDir,
-			Entities:  g.eng.Entities(),
-			Frame:     g.eng.Frame(),
+			Room:          g.result.Room,
+			PlayerX:       g.result.PlayerX,
+			PlayerY:       g.result.PlayerY,
+			PlayerDir:     g.result.PlayerDir,
+			Entities:      g.eng.Entities(),
+			Frame:         g.eng.Frame(),
+			WeaponActive:  wActive,
+			WeaponX:       wx,
+			WeaponY:       wy,
+			WeaponGraphic: wgfx,
+			WeaponAttr:    wattr,
 		}
 		pixels3d := g.renderer3d.Render(rs)
 		// Copy only the play area (192 pixels wide) from the 3D buffer

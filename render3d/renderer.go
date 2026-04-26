@@ -17,6 +17,13 @@ type RenderState struct {
 	PlayerDir int
 	Entities  *entity.Pool
 	Frame     uint32
+
+	// Weapon state (active = false if no weapon in flight)
+	WeaponActive  bool
+	WeaponX       int
+	WeaponY       int
+	WeaponGraphic byte
+	WeaponAttr    byte
 }
 
 // Renderer is the 3D rendering engine.
@@ -212,6 +219,18 @@ func (r *Renderer) Render(s RenderState) []byte {
 			}
 			RenderSpriteBillboard(r.raster, &r.camera, e, w, h)
 		})
+	}
+
+	// Render weapon (axe/fireball/sword) as a billboard
+	if s.WeaponActive {
+		fakeEntity := entity.Entity{
+			Active:  true,
+			X:       s.WeaponX,
+			Y:       s.WeaponY,
+			Graphic: s.WeaponGraphic,
+			Attr:    s.WeaponAttr,
+		}
+		RenderSpriteBillboard(r.raster, &r.camera, &fakeEntity, w, h)
 	}
 
 	// Render ALL room decorations (doors, arches, shields, torches, etc.)

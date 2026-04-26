@@ -216,6 +216,48 @@ func (g *GameEnv) PlayerDir() int { return g.playerDir }
 // keep the weapon aim aligned with the camera yaw).
 func (g *GameEnv) SetPlayerDir(dir int) { g.playerDir = dir }
 
+// WeaponState reports the current weapon's position, sprite, and colour.
+// Returns active=false if no weapon is currently in flight.
+func (g *GameEnv) WeaponState() (active bool, x, y int, graphicID byte, attr byte) {
+	if !g.weaponActive {
+		return false, 0, 0, 0, 0
+	}
+	switch g.character {
+	case data.Knight:
+		frame := (^byte(g.weaponFrame) >> 1) & 0x07
+		graphicID = 0x40 + frame
+		attr = 0x42
+	case data.Wizard:
+		frame := byte(g.weaponFrame) & 0x03
+		graphicID = 0x34 + frame
+		if g.weaponFrame&0x02 == 0 {
+			attr = 0x45
+		} else {
+			attr = 0x47
+		}
+	case data.Serf:
+		dir := byte(0)
+		if g.weaponDY < 0 {
+			dir = 4
+		} else if g.weaponDY == 0 {
+			if g.weaponDX > 0 {
+				dir = 2
+			} else if g.weaponDX < 0 {
+				dir = 6
+			}
+			return true, g.weaponX, g.weaponY, 0x38 + dir, 0x46
+		}
+		if g.weaponDX > 0 {
+			dir++
+		} else if g.weaponDX < 0 {
+			dir--
+		}
+		graphicID = 0x38 + (dir & 0x07)
+		attr = 0x46
+	}
+	return true, g.weaponX, g.weaponY, graphicID, attr
+}
+
 // PlayerMoving returns whether the player is currently moving.
 func (g *GameEnv) PlayerMoving() bool { return g.moving }
 
