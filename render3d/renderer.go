@@ -1,6 +1,8 @@
 package render3d
 
 import (
+	"fmt"
+
 	"github.com/seamuswaldron/aticatac/data"
 	"github.com/seamuswaldron/aticatac/entity"
 	"github.com/seamuswaldron/aticatac/screen"
@@ -18,10 +20,11 @@ type RenderState struct {
 
 // Renderer is the 3D rendering engine.
 type Renderer struct {
-	raster    *Raster
-	wallCache *WallCache
-	camera    Camera
-	rgbaOut   []byte
+	raster     *Raster
+	wallCache  *WallCache
+	camera     Camera
+	rgbaOut    []byte
+	debugFrame int
 }
 
 // NewRenderer creates a new 3D renderer.
@@ -67,6 +70,12 @@ func (r *Renderer) Render(s RenderState) []byte {
 	r.camera.TargetZ = pos.Z
 	r.camera.Y = 0.75 // eye height (midpoint of 1.5-unit walls)
 	r.camera.Update()
+
+	if r.debugFrame%50 == 0 {
+		fmt.Printf("3D: player=(%d,%d) cam=(%.2f,%.2f,%.2f) yaw=%.2f targetYaw=%.2f room=%d\n",
+			s.PlayerX, s.PlayerY, r.camera.X, r.camera.Y, r.camera.Z, r.camera.Yaw, r.camera.TargetYaw, s.Room)
+	}
+	r.debugFrame++
 
 	w := r.raster.Width
 	h := r.raster.Height
