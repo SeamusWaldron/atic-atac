@@ -71,8 +71,10 @@ func RenderSpriteBillboard(r *Raster, cam *Camera, e *entity.Entity, screenW, sc
 	worldW := float32(sprWidthPx) / coordScale
 	worldH := float32(sprHeight) / coordScale
 
-	// Billboard centre Y — standard Y-up (positive = up from floor)
-	centreY := worldH / 2
+	// Billboard centre Y — standard Y-up (positive = up from floor).
+	// Offset down by 0.10 so creatures appear lower (feet on floor instead
+	// of floating slightly above).
+	centreY := worldH/2 - 0.10
 
 	// Project two corners of the billboard to get screen extent
 	c0 := Vec3{cs.X - worldW/2, centreY - worldH/2, cs.Z}
