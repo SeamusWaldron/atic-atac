@@ -80,32 +80,39 @@ func (r *Renderer) Render(s RenderState) []byte {
 	w := r.raster.Width
 	h := r.raster.Height
 
-	// DEBUG: Draw green dot at projected FLOOR and red dot at projected CEILING
-	// of a point 3 units directly in front of the camera
+	// DEBUG: Wall markers — coloured dots at the centre of each wall
+	// Green=SOUTH (bottom, in front when facing down)
+	// Red=NORTH (top, behind when facing down)
+	// Cyan=WEST (left)  Yellow=EAST (right)
+	// Also floor/ceiling markers 3 units ahead
 	{
-		fwd := Vec3{r.camera.X + 3*r.camera.sinYaw, 0, r.camera.Z + 3*r.camera.cosYaw}
-		// Floor point (Y=0)
-		csF := r.camera.WorldToCamera(Vec3{fwd.X, 0, fwd.Z})
-		sxF, syF, _, visF := r.camera.Project(csF, w, h)
-		if visF {
-			for dy := -2; dy <= 2; dy++ {
-				for dx := -2; dx <= 2; dx++ {
-					r.raster.setPixel(sxF+dx, syF+dy, 0.01, 4) // green = floor
+		ra := data.RoomAttrs[s.Room]
+		style := data.RoomStyles[ra.Style]
+		rw := float32(style.Width) // half-size of playable area in pixels
+		rh := float32(style.Height)
+		// Wall centres in pixel coords (inner boundary approx)
+		wallMarkers := []struct{ name string; px,py float32; color byte }{
+			{"SOUTH", float32(roomCentreX), float32(roomCentreY)+rh, 4},   // green
+			{"NORTH", float32(roomCentreX), float32(roomCentreY)-rh, 2},   // red
+			{"WEST",  float32(roomCentreX)-rw, float32(roomCentreY), 5},   // cyan
+			{"EAST",  float32(roomCentreX)+rw, float32(roomCentreY), 6},   // yellow
+		}
+		for _, wm := range wallMarkers {
+			wpos := PixelToWorld(int(wm.px), int(wm.py))
+			wpos.Y = 0.75 // mid-wall height
+			cs := r.camera.WorldToCamera(wpos)
+			sx, sy, _, vis := r.camera.Project(cs, w, h)
+			if vis {
+				for dy := -3; dy <= 3; dy++ {
+					for dx := -3; dx <= 3; dx++ {
+						r.raster.setPixel(sx+dx, sy+dy, 0.01, wm.color)
+					}
 				}
 			}
-		}
-		// Ceiling point (Y=1.5)
-		csC := r.camera.WorldToCamera(Vec3{fwd.X, 1.5, fwd.Z})
-		sxC, syC, _, visC := r.camera.Project(csC, w, h)
-		if visC {
-			for dy := -2; dy <= 2; dy++ {
-				for dx := -2; dx <= 2; dx++ {
-					r.raster.setPixel(sxC+dx, syC+dy, 0.01, 2) // red = ceiling
-				}
+			if r.debugFrame%250 == 1 && vis {
+				fmt.Printf("  WALL %s: pixel=(%.0f,%.0f) world=(%.2f,%.2f) screen=(%d,%d)\n",
+					wm.name, wm.px, wm.py, wpos.X, wpos.Z, sx, sy)
 			}
-		}
-		if r.debugFrame%50 == 1 && visF && visC {
-			fmt.Printf("  DEBUG: floor_sy=%d ceiling_sy=%d (centre=%d)\n", syF, syC, h/2)
 		}
 	}
 
@@ -157,6 +164,9 @@ func (r *Renderer) Render(s RenderState) []byte {
 	}
 
 	// Render ALL room decorations (doors, arches, shields, torches, etc.)
+	if r.debugFrame%250 == 2 {
+		fmt.Println("  Decorations:")
+	}
 	r.renderDecorations(s, w, h)
 
 	// Convert to RGBA (HUD is drawn by the 2D renderer, not here)
