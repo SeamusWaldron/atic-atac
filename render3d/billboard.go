@@ -209,6 +209,44 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 	}
 	heightCells := (height + 7) / 8
 
+	// Detect first and last rows with actual content. Some sprites (like the
+	// ACG door) have empty rows at the top or bottom which would make the
+	// decoration appear to float. We anchor the VISIBLE content to the wall.
+	contentBottom := 0  // first row with content (sprite row 0 = bottom)
+	contentTop := height // exclusive
+	for r := 0; r < height; r++ {
+		any := false
+		for b := 0; b < widthBytes; b++ {
+			if sprPixels[r*widthBytes+b] != 0 {
+				any = true
+				break
+			}
+		}
+		if any {
+			contentBottom = r
+			break
+		}
+	}
+	for r := height - 1; r >= 0; r-- {
+		any := false
+		for b := 0; b < widthBytes; b++ {
+			if sprPixels[r*widthBytes+b] != 0 {
+				any = true
+				break
+			}
+		}
+		if any {
+			contentTop = r + 1
+			break
+		}
+	}
+	visibleHeight := contentTop - contentBottom
+	if visibleHeight <= 0 {
+		visibleHeight = height
+		contentBottom = 0
+		contentTop = height
+	}
+
 	// Entity (px, py) is the bottom-left of the displayed sprite.
 	// Centre offset depends on wall direction:
 	//   N/S walls: sprite spans X (along wall), so offset px by widthPx/2
@@ -224,10 +262,10 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 		basePos = PixelToWorld(px+widthPx/2, py)
 	}
 	halfW := float32(widthPx) / 2 / coordScale
-	// Clamp decoration vertical extent to wall height so taller sprites
-	// (like ACG door, suits of armour) don't protrude above the ceiling.
-	// Bottom stays at floor (Y=0); top is capped at wallHeight.
-	topY := float32(height) / coordScale
+	// Use visible content height (skip empty rows at top/bottom) so the
+	// decoration anchors its actual content to the wall, not blank space.
+	// Then clamp to wall height so it doesn't protrude above the ceiling.
+	topY := float32(visibleHeight) / coordScale
 	if topY > wallHeight {
 		topY = wallHeight
 	}
@@ -319,14 +357,17 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 			}
 
 			// Map UV to sprite pixel.
-			// ZX Spectrum sprites are stored bottom-up: row 0 = bottom of sprite.
-			// v=0 is ceiling (top of screen), so invert to get correct row.
+			// ZX Spectrum sprites are stored bottom-up: row 0 = bottom.
+			// Map v=1 (floor) → contentBottom (lowest visible row)
+			// Map v=0 (ceiling) → contentTop-1 (highest visible row)
+			// This skips empty rows at the bottom/top of the sprite so
+			// the visible content anchors correctly to the wall.
 			sprCol := int(u * float32(widthPx))
-			sprRow := height - 1 - int(v*float32(height))
+			sprRow := contentTop - 1 - int(v*float32(visibleHeight))
 			if sprCol < 0 { sprCol = 0 }
-			if sprRow < 0 { sprRow = 0 }
+			if sprRow < contentBottom { sprRow = contentBottom }
 			if sprCol >= widthPx { sprCol = widthPx - 1 }
-			if sprRow >= height { sprRow = height - 1 }
+			if sprRow >= contentTop { sprRow = contentTop - 1 }
 
 			// Check sprite pixel
 			byteIdx := sprCol / 8
