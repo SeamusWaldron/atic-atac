@@ -351,6 +351,13 @@ func triUV(px, py, ax, ay, au, av, ainvz, bx, by, bu, bv, binvz, cx, cy, cu, cv,
 	w1 := ((cy-ay)*(px-cx) + (ax-cx)*(py-cy)) * inv
 	w2 := 1.0 - w0 - w1
 
+	// Handle reversed winding (caused by -ndcY projection flipping screen Y).
+	// When winding is reversed, all barycentric coords are negative.
+	// Negate them to get correct interpolation.
+	if denom < 0 {
+		w0, w1, w2 = -w0, -w1, -w2
+	}
+
 	if w0 < -0.001 || w1 < -0.001 || w2 < -0.001 {
 		return 0, 0, 0, false
 	}
