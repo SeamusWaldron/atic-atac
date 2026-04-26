@@ -16,6 +16,11 @@ type projVert struct {
 // Returns nil if no sprite data is available.
 // Sprite format: first byte = height, then 2 bytes per row (16 pixels wide).
 func SpriteLookup(e *entity.Entity) []byte {
+	// Explosions use the 4-frame "pop" disintegrate animation, not the
+	// regular sprite table.
+	if e.Type == entity.TypeExplosion {
+		return data.PopFrames(int(e.Frame >> 2))
+	}
 	graphicID := int(e.Graphic)
 	if graphicID == 0 {
 		return nil
