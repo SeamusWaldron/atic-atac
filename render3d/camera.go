@@ -19,7 +19,7 @@ type Camera struct {
 // NewCamera creates a camera with sensible defaults.
 func NewCamera() Camera {
 	return Camera{
-		FOV:  2.0, // ~115 degrees — wide enough to see the room
+		FOV:  1.22, // ~70 degrees — standard FPS field of view
 		Near: 0.05,
 		Far:  50.0,
 	}
