@@ -394,18 +394,21 @@ func (g *Game) read3DAction() action.Action {
 	rightNow := ebiten.IsKeyPressed(ebiten.KeyRight) || ebiten.IsKeyPressed(ebiten.KeyP)
 	downNow := ebiten.IsKeyPressed(ebiten.KeyDown) || ebiten.IsKeyPressed(ebiten.KeyA)
 
+	// In our coordinate system (forward F = (-sin yaw, 0, cos yaw)):
+	//   yaw=π (north) → 1 right turn (CW) → yaw=π+π/4 → NE → 2 rights → east (yaw=-π/2)
+	// So RIGHT increases yaw and LEFT decreases yaw.
 	if leftNow && !g.lastLeftPressed {
 		if shift {
-			g.cameraYaw += math.Pi / 2 // 90° left
+			g.cameraYaw -= math.Pi / 2 // 90° left (CCW)
 		} else {
-			g.cameraYaw += math.Pi / 4 // 45° left
+			g.cameraYaw -= math.Pi / 4 // 45° left
 		}
 	}
 	if rightNow && !g.lastRightPressed {
 		if shift {
-			g.cameraYaw -= math.Pi / 2 // 90° right
+			g.cameraYaw += math.Pi / 2 // 90° right (CW)
 		} else {
-			g.cameraYaw -= math.Pi / 4 // 45° right
+			g.cameraYaw += math.Pi / 4 // 45° right
 		}
 	}
 	if shift && downNow && !g.lastDownPressed {
