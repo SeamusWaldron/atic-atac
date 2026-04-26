@@ -39,19 +39,27 @@ func BuildRoomWalls(style *data.RoomStyle, attr data.RoomAttr) []Quad {
 
 	var quads []Quad
 	pts := style.Points
+	innerStart := len(pts) / 2 // first half = outer frame, second half = inner boundary
 
 	for _, lg := range style.Lines {
 		src := int(lg.Src)
 		if src >= len(pts) {
 			continue
 		}
-		sx, sy := float32(pts[src].X), float32(pts[src].Y)
 
 		for _, dst := range lg.Dsts {
 			di := int(dst)
 			if di >= len(pts) {
 				continue
 			}
+
+			// Only extrude inner boundary segments (both endpoints in inner half).
+			// Skip outer frame and connecting diagonal lines — they create tramlines.
+			if src < innerStart || di < innerStart {
+				continue
+			}
+
+			sx, sy := float32(pts[src].X), float32(pts[src].Y)
 			dx, dy := float32(pts[di].X), float32(pts[di].Y)
 
 			// Convert 2D endpoints to 3D floor positions
