@@ -140,7 +140,9 @@ func drawSettings(buf *screen.Buffer, ms *MenuState) {
 	}
 
 	for i, s := range settings {
-		y := 24 + i*20
+		// 16-pixel spacing: every y is a multiple of 8 (cell-aligned) so
+		// the per-cell attribute correctly highlights the entire text row.
+		y := 24 + i*16
 		attr := byte(0x45) // cyan
 
 		// Draw option
@@ -164,11 +166,11 @@ func drawSettings(buf *screen.Buffer, ms *MenuState) {
 		}
 	}
 
-	// Instructions
-	buf.DrawStringFrom(16, 152, "Q/A#SELECT  ENT#TOGGLE", cs)
-	buf.FillAttrArea(0, 19, 24, 1, 0x46)
-	buf.DrawStringFrom(48, 168, "ESC#BACK", cs)
-	buf.FillAttrArea(0, 21, 24, 1, 0x45)
+	// Instructions (cell-aligned positions: y=144 → row 18, y=160 → row 20)
+	buf.DrawStringFrom(16, 144, "Q/A#SELECT  ENT#TOGGLE", cs)
+	buf.FillAttrArea(0, 18, 24, 1, 0x46)
+	buf.DrawStringFrom(48, 160, "ESC#BACK", cs)
+	buf.FillAttrArea(0, 20, 24, 1, 0x45)
 }
 
 func drawMenuIcon(buf *screen.Buffer, graphicID byte, x, y int, attr byte) {
