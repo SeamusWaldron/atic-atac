@@ -60,13 +60,15 @@ func BuildRoomWalls(style *data.RoomStyle, attr data.RoomAttr) []Quad {
 			x1 := (dx - float32(roomCentreX)) / coordScale
 			z1 := (dy - float32(roomCentreY)) / coordScale
 
-			// Extrude into a vertical wall quad (CCW from outside)
+			// Extrude into a vertical wall quad.
+			// Y is negated so that after the vertical buffer flip in ToRGBA,
+			// floor (Y=0) appears at the bottom and ceiling at the top.
 			q := Quad{
 				Verts: [4]Vec3{
-					{x0, 0, z0},           // bottom-left
-					{x1, 0, z1},           // bottom-right
-					{x1, wallHeight, z1},  // top-right
-					{x0, wallHeight, z0},  // top-left
+					{x0, 0, z0},            // bottom-left (floor)
+					{x1, 0, z1},            // bottom-right (floor)
+					{x1, -wallHeight, z1},  // top-right (ceiling)
+					{x0, -wallHeight, z0},  // top-left (ceiling)
 				},
 				Color:     fillIdx,
 				EdgeColor: edgeIdx,
