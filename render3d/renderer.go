@@ -157,39 +157,49 @@ func (r *Renderer) Render(s RenderState) []byte {
 	}
 
 	// Render walls for current room.
-	// No back-face culling — line segment winding is arbitrary (from the 2D
-	// wireframe data), and the Z-buffer handles occlusion correctly.
+	// Edges are clipped against the near plane so nearby walls don't vanish.
 	walls := r.wallCache.Walls[s.Room]
 	for i := range walls {
 		q := &walls[i]
 
-		// Project all 4 vertices; skip if any behind near plane
-		var sv [4]ScreenVert
-		allVisible := true
+		// Transform all 4 vertices to camera space
+		var cs [4]Vec3
 		for j := 0; j < 4; j++ {
-			cs := r.camera.WorldToCamera(q.Verts[j])
-			sx, sy, depth, vis := r.camera.Project(cs, w, h)
-			if !vis {
-				allVisible = false
+			cs[j] = r.camera.WorldToCamera(q.Verts[j])
+		}
+
+		// Check if ALL vertices are behind near plane — skip entirely
+		allBehind := true
+		for j := 0; j < 4; j++ {
+			if cs[j].Z > r.camera.Near {
+				allBehind = false
 				break
 			}
-			sv[j] = ScreenVert{float32(sx), float32(sy), depth}
 		}
-		if !allVisible {
+		if allBehind {
 			continue
 		}
 
-		// Fill the quad with paper (dark) colour — walls are dark surfaces
-		r.raster.FillQuad(sv[0], sv[1], sv[2], sv[3], q.Color)
+		// Project visible vertices; clip those behind near plane
+		var sv [4]ScreenVert
+		var visible [4]bool
+		for j := 0; j < 4; j++ {
+			if cs[j].Z > r.camera.Near {
+				sx, sy, depth, _ := r.camera.Project(cs[j], w, h)
+				sv[j] = ScreenVert{float32(sx), float32(sy), depth}
+				visible[j] = true
+			}
+		}
 
-		// Draw edges in bright ink — wireframe structure on dark walls
+		// Fill quad only if all vertices visible (simple case)
+		if visible[0] && visible[1] && visible[2] && visible[3] {
+			r.raster.FillQuad(sv[0], sv[1], sv[2], sv[3], q.Color)
+		}
+
+		// Draw edges with near-plane clipping
 		for j := 0; j < 4; j++ {
 			k := (j + 1) % 4
-			r.raster.DrawLine(
-				int(sv[j].X), int(sv[j].Y), sv[j].Depth,
-				int(sv[k].X), int(sv[k].Y), sv[k].Depth,
-				q.EdgeColor,
-			)
+			r.drawClippedEdge(cs[j], cs[k], q.EdgeColor, w, h)
 		}
 	}
 
@@ -286,5 +296,40 @@ func (r *Renderer) renderDecorations(s RenderState, w, h int) {
 		}
 		RenderWallDecoration(r.raster, &r.camera, drawX, drawY, wall, sprData, attrData, roomAttr, w, h)
 	}
+}
+
+// drawClippedEdge draws a line between two camera-space points, clipping
+// against the near plane. If one endpoint is behind the camera, the line
+// is clipped to the near plane intersection.
+func (r *Renderer) drawClippedEdge(a, b Vec3, color byte, screenW, screenH int) {
+	nearZ := r.camera.Near
+
+	aFront := a.Z > nearZ
+	bFront := b.Z > nearZ
+
+	if !aFront && !bFront {
+		return // both behind
+	}
+
+	// Clip to near plane if needed
+	ca, cb := a, b
+	if !aFront {
+		// Clip a to near plane
+		t := (nearZ - a.Z) / (b.Z - a.Z)
+		ca = Vec3{a.X + t*(b.X-a.X), a.Y + t*(b.Y-a.Y), nearZ + 0.001}
+	}
+	if !bFront {
+		// Clip b to near plane
+		t := (nearZ - b.Z) / (a.Z - b.Z)
+		cb = Vec3{b.X + t*(a.X-b.X), b.Y + t*(a.Y-b.Y), nearZ + 0.001}
+	}
+
+	sx0, sy0, d0, v0 := r.camera.Project(ca, screenW, screenH)
+	sx1, sy1, d1, v1 := r.camera.Project(cb, screenW, screenH)
+	if !v0 || !v1 {
+		return
+	}
+
+	r.raster.DrawLine(sx0, sy0, d0, sx1, sy1, d1, color)
 }
 
