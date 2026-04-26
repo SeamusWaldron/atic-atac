@@ -99,9 +99,11 @@ func RenderSpriteBillboard(r *Raster, cam *Camera, e *entity.Entity, screenW, sc
 	}
 
 	// Draw sprite pixel-by-pixel, sampling from the original bitmap
+	// Sprite row 0 = head (top), drawn at the BOTTOM of the screen rect
+	// because higher world Y (top of billboard) → smaller screen Y (top of screen)
+	// and spy=0 starts at sy0 (top of screen), so we invert the row mapping.
 	for py := 0; py < screenSprH; py++ {
-		// Map screen Y back to sprite row
-		sprRow := py * sprHeight / screenSprH
+		sprRow := (screenSprH - 1 - py) * sprHeight / screenSprH
 		if sprRow >= sprHeight {
 			sprRow = sprHeight - 1
 		}
