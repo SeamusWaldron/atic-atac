@@ -135,7 +135,8 @@ func RenderSpriteBillboard(r *Raster, cam *Camera, e *entity.Entity, screenW, sc
 			if set {
 				screenX := sx0 + px
 				screenY := sy0 + py
-				r.setPixel(screenX, screenY, cs.Z, colorIdx)
+				// Bias slightly forward so sprites aren't occluded by walls at same Z
+				r.setPixel(screenX, screenY, cs.Z-0.005, colorIdx)
 			}
 		}
 	}
@@ -320,7 +321,9 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 			attrRow := heightCells - 1 - cellRow
 			colorIdx := attrColorForCell(attrs, attrW, attrH, cellCol, attrRow, widthBytes, roomAttr)
 
-			r.setPixel(sx, sy, depth, colorIdx)
+			// Bias decoration depth slightly forward so it wins depth test
+			// against the wall fill at the same surface
+			r.setPixel(sx, sy, depth-0.005, colorIdx)
 		}
 	}
 }

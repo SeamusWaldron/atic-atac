@@ -154,32 +154,70 @@ func (r *Raster) FillQuad(v0, v1, v2, v3 ScreenVert, color byte) {
 	r.FillTriangle(v0, v2, v3, color)
 }
 
-// DrawLine draws a line between two screen-space points with Z-testing.
+// DrawLine draws a line between two screen-space points using Bresenham's
+// algorithm with Z-interpolation. The depth is biased forward so edges draw
+// on top of wall fills at the same surface.
 func (r *Raster) DrawLine(x0, y0 int, z0 float32, x1, y1 int, z1 float32, color byte) {
 	dx := x1 - x0
 	dy := y1 - y0
-	if dx < 0 {
-		dx = -dx
+	adx := dx
+	ady := dy
+	if adx < 0 {
+		adx = -adx
 	}
-	if dy < 0 {
-		dy = -dy
+	if ady < 0 {
+		ady = -ady
 	}
 
-	steps := dx
-	if dy > steps {
-		steps = dy
-	}
-	if steps == 0 {
-		r.setPixel(x0, y0, z0, color)
+	if adx == 0 && ady == 0 {
+		r.setPixel(x0, y0, z0-0.01, color)
 		return
 	}
 
-	for i := 0; i <= steps; i++ {
-		t := float32(i) / float32(steps)
-		x := x0 + int(t*float32(x1-x0))
-		y := y0 + int(t*float32(y1-y0))
-		z := z0 + t*(z1-z0)
-		r.setPixel(x, y, z-0.001, color) // slight bias so edges draw on top of fills
+	totalSteps := adx
+	if ady > totalSteps {
+		totalSteps = ady
+	}
+
+	sx := 1
+	if dx < 0 {
+		sx = -1
+	}
+	sy := 1
+	if dy < 0 {
+		sy = -1
+	}
+
+	x, y := x0, y0
+	step := 0
+	if adx >= ady {
+		// X-major
+		err := adx / 2
+		for ; step <= adx; step++ {
+			t := float32(step) / float32(totalSteps)
+			z := z0 + t*(z1-z0)
+			r.setPixel(x, y, z-0.01, color)
+			err -= ady
+			if err < 0 {
+				y += sy
+				err += adx
+			}
+			x += sx
+		}
+	} else {
+		// Y-major
+		err := ady / 2
+		for ; step <= ady; step++ {
+			t := float32(step) / float32(totalSteps)
+			z := z0 + t*(z1-z0)
+			r.setPixel(x, y, z-0.01, color)
+			err -= adx
+			if err < 0 {
+				x += sx
+				err += ady
+			}
+			y += sy
+		}
 	}
 }
 
