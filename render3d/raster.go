@@ -184,16 +184,22 @@ func (r *Raster) DrawLine(x0, y0 int, z0 float32, x1, y1 int, z1 float32, color 
 }
 
 // ToRGBA converts the palette-indexed colour buffer into RGBA bytes.
+// The output is vertically flipped so that the 3D scene (rendered with
+// Y-up convention) displays correctly on screen (Y-down convention).
 func (r *Raster) ToRGBA(out []byte) {
-	for i, ci := range r.ColorBuf {
-		var c color.RGBA
-		if int(ci) < len(screen.Palette) {
-			c = screen.Palette[ci]
+	for y := 0; y < r.Height; y++ {
+		srcRow := r.Height - 1 - y // flip vertically
+		for x := 0; x < r.Width; x++ {
+			ci := r.ColorBuf[srcRow*r.Width+x]
+			var c color.RGBA
+			if int(ci) < len(screen.Palette) {
+				c = screen.Palette[ci]
+			}
+			off := (y*r.Width + x) * 4
+			out[off] = c.R
+			out[off+1] = c.G
+			out[off+2] = c.B
+			out[off+3] = c.A
 		}
-		off := i * 4
-		out[off] = c.R
-		out[off+1] = c.G
-		out[off+2] = c.B
-		out[off+3] = c.A
 	}
 }
