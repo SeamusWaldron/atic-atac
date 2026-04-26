@@ -216,6 +216,15 @@ func (g *GameEnv) PlayerDir() int { return g.playerDir }
 // keep the weapon aim aligned with the camera yaw).
 func (g *GameEnv) SetPlayerDir(dir int) { g.playerDir = dir }
 
+// ClearLastMovement zeros the last-movement deltas. The weapon firing code
+// uses lastDX/lastDY when non-zero, falling back to playerDir otherwise.
+// 3D mode calls this each frame so the weapon fires in the camera direction
+// (via playerDir) rather than the stale last-2D-movement direction.
+func (g *GameEnv) ClearLastMovement() {
+	g.lastDX = 0
+	g.lastDY = 0
+}
+
 // WeaponState reports the current weapon's position, sprite, and colour.
 // Returns active=false if no weapon is currently in flight.
 func (g *GameEnv) WeaponState() (active bool, x, y int, graphicID byte, attr byte) {

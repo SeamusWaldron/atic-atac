@@ -457,6 +457,11 @@ func (g *Game) read3DAction() action.Action {
 	// sprites face the way the camera is looking.
 	g.eng.SetPlayerDir(g.yawToPlayerDir(g.cameraYaw))
 
+	// Clear lastDX/lastDY so weapon fires from playerDir (camera yaw),
+	// not from stale last-2D-movement direction. The engine will repopulate
+	// these from the action if forward/back is being pressed.
+	g.eng.ClearLastMovement()
+
 	return act
 }
 
