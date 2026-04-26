@@ -214,12 +214,20 @@ func (r *Renderer) Render(s RenderState) []byte {
 	return r.rgbaOut
 }
 
-// renderDecorations draws ALL room decorations as billboards.
-// This includes door arches, shields, torches, bookcases, barrels, etc.
-// Colour is extracted from GenDecoAttrs (the attribute painting data),
-// NOT from the entity flags byte which contains rotation/blend mode.
+// renderDecorations draws ALL room decorations projected onto walls.
+// Colour is extracted from GenDecoAttrs (the attribute painting data).
+// Decoration depth is snapped to the wall surface so bases align with
+// the wall wireframe floor line.
 func (r *Renderer) renderDecorations(s RenderState, w, h int) {
 	roomAttr := data.RoomAttrs[s.Room].Colour
+
+	// Get wall boundary positions from room style
+	ra := data.RoomAttrs[s.Room]
+	style := data.RoomStyles[ra.Style]
+	wallNorthPx := int(roomCentreY) - int(style.Height) // pixel Y of north wall
+	wallSouthPx := int(roomCentreY) + int(style.Height)
+	wallWestPx := int(roomCentreX) - int(style.Width)
+	wallEastPx := int(roomCentreX) + int(style.Width)
 
 	entities := data.GenRoomEntityData[int(s.Room)]
 	for _, pair := range entities {
@@ -262,7 +270,21 @@ func (r *Renderer) renderDecorations(s RenderState, w, h int) {
 
 		// Determine which wall this decoration is on from its rotation mode
 		wall := WallFromMode(mode, x, y)
-		RenderWallDecoration(r.raster, &r.camera, x, y, wall, sprData, attrData, roomAttr, w, h)
+
+		// Snap decoration depth to the wall surface so its floor line
+		// aligns with the wall wireframe
+		drawX, drawY := x, y
+		switch wall {
+		case WallNorth:
+			drawY = wallNorthPx
+		case WallSouth:
+			drawY = wallSouthPx
+		case WallWest:
+			drawX = wallWestPx
+		case WallEast:
+			drawX = wallEastPx
+		}
+		RenderWallDecoration(r.raster, &r.camera, drawX, drawY, wall, sprData, attrData, roomAttr, w, h)
 	}
 }
 
