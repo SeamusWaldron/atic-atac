@@ -245,18 +245,20 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 			{basePos.X + halfW, topY, basePos.Z},
 		}
 	case WallWest:
+		// Player faces -X. Camera left = +Z (south). u=0 should be on camera left.
 		corners = [4]Vec3{
-			{basePos.X, 0, basePos.Z - halfW},
-			{basePos.X, 0, basePos.Z + halfW},
-			{basePos.X, topY, basePos.Z + halfW},
+			{basePos.X, 0, basePos.Z + halfW},     // c0 (u=0) at +Z (south = camera left)
+			{basePos.X, 0, basePos.Z - halfW},     // c1 (u=1) at -Z (north = camera right)
 			{basePos.X, topY, basePos.Z - halfW},
+			{basePos.X, topY, basePos.Z + halfW},
 		}
 	case WallEast:
+		// Player faces +X. Camera left = -Z (north). u=0 should be on camera left.
 		corners = [4]Vec3{
-			{basePos.X, 0, basePos.Z + halfW},
-			{basePos.X, 0, basePos.Z - halfW},
-			{basePos.X, topY, basePos.Z - halfW},
+			{basePos.X, 0, basePos.Z - halfW},     // c0 (u=0) at -Z (north = camera left)
+			{basePos.X, 0, basePos.Z + halfW},     // c1 (u=1) at +Z (south = camera right)
 			{basePos.X, topY, basePos.Z + halfW},
+			{basePos.X, topY, basePos.Z - halfW},
 		}
 	default:
 		// Camera-facing fallback
