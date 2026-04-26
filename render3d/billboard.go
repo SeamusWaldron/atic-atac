@@ -224,7 +224,13 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 		basePos = PixelToWorld(px+widthPx/2, py)
 	}
 	halfW := float32(widthPx) / 2 / coordScale
-	topY := float32(height) / coordScale // top of sprite (standard Y-up)
+	// Clamp decoration vertical extent to wall height so taller sprites
+	// (like ACG door, suits of armour) don't protrude above the ceiling.
+	// Bottom stays at floor (Y=0); top is capped at wallHeight.
+	topY := float32(height) / coordScale
+	if topY > wallHeight {
+		topY = wallHeight
+	}
 
 	// Build the 4 world-space corners of the sprite quad:
 	// c0=bottom-left, c1=bottom-right, c2=top-right, c3=top-left
