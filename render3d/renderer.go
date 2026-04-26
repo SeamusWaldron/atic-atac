@@ -148,6 +148,7 @@ func (r *Renderer) renderDecorations(s RenderState, w, h int) {
 		typeID := int(e[0])
 		x := int(e[3])
 		y := int(e[4])
+		mode := (int(e[5]) >> 5) & 0x07
 
 		if typeID <= 0 || typeID > 0x26 {
 			continue
@@ -171,7 +172,9 @@ func (r *Renderer) renderDecorations(s RenderState, w, h int) {
 		// Get per-cell attribute data for multi-colour rendering
 		attrData := data.GenDecoAttrs[gfxIdx] // nil if not present
 
-		RenderDecoBillboard(r.raster, &r.camera, x, y, sprData, attrData, roomAttr, w, h)
+		// Determine which wall this decoration is on from its rotation mode
+		wall := WallFromMode(mode, x, y)
+		RenderWallDecoration(r.raster, &r.camera, x, y, wall, sprData, attrData, roomAttr, w, h)
 	}
 }
 

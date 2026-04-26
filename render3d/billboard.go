@@ -131,11 +131,49 @@ func RenderSpriteBillboard(r *Raster, cam *Camera, e *entity.Entity, screenW, sc
 	}
 }
 
-// RenderDecoBillboard draws a room decoration as a camera-facing billboard.
-// Decoration sprite format: [widthBytes, height, ...pixels] where width is in bytes (×8 for pixels).
-// attrData is the per-cell attribute grid: [widthCells, heightCells, ...attrs].
-// Each attr byte is a ZX Spectrum colour. 0x00 = transparent, 0xFF = use roomAttr.
-func RenderDecoBillboard(r *Raster, cam *Camera, px, py int, sprData []byte, attrData []byte, roomAttr byte, screenW, screenH int) {
+// WallDir indicates which wall a decoration is mounted on.
+type WallDir int
+
+const (
+	WallNone  WallDir = iota
+	WallNorth         // facing +Z (into room from top)
+	WallSouth         // facing -Z (into room from bottom)
+	WallWest          // facing +X (into room from left)
+	WallEast          // facing -X (into room from right)
+)
+
+// WallFromMode returns the wall direction based on the decoration's rotation
+// mode (bits 7-5 of the entity flags byte) and position.
+func WallFromMode(mode int, px, py int) WallDir {
+	switch mode {
+	case 0, 1: // normal / h-flip → N/S wall
+		if py < roomCentreY {
+			return WallNorth
+		}
+		return WallSouth
+	case 4, 5: // 180° → N/S wall (flipped)
+		if py > roomCentreY {
+			return WallSouth
+		}
+		return WallNorth
+	case 2, 3: // 90° rotation → E/W wall
+		if px > roomCentreX {
+			return WallEast
+		}
+		return WallWest
+	case 6, 7: // 270° rotation → E/W wall
+		if px < roomCentreX {
+			return WallWest
+		}
+		return WallEast
+	}
+	return WallNone
+}
+
+// RenderWallDecoration draws a decoration projected onto its wall surface.
+// Each sprite pixel is individually projected through the camera from its
+// world position on the wall, giving correct perspective automatically.
+func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprData []byte, attrData []byte, roomAttr byte, screenW, screenH int) {
 	if len(sprData) < 2 {
 		return
 	}
@@ -147,7 +185,7 @@ func RenderDecoBillboard(r *Raster, cam *Camera, px, py int, sprData []byte, att
 	}
 	pixels := sprData[2:]
 
-	// Build per-cell colour lookup from attr data
+	// Build per-cell colour lookup
 	var attrW, attrH int
 	var attrs []byte
 	if len(attrData) >= 2 {
@@ -158,78 +196,65 @@ func RenderDecoBillboard(r *Raster, cam *Camera, px, py int, sprData []byte, att
 		}
 	}
 
-	// World position
-	pos := PixelToWorld(px, py)
-
-	cs := cam.WorldToCamera(pos)
-	if cs.Z <= cam.Near {
-		return
-	}
-
-	// Billboard size in world units
-	worldW := float32(widthPx) / coordScale
-	worldH := float32(height) / coordScale
-
-	centreY := worldH / 2
-	corner0 := Vec3{cs.X - worldW/2, centreY + worldH/2, cs.Z}
-	corner1 := Vec3{cs.X + worldW/2, centreY - worldH/2, cs.Z}
-
-	px0, py0, _, vis0 := cam.Project(corner0, screenW, screenH)
-	px1, py1, _, vis1 := cam.Project(corner1, screenW, screenH)
-	if !vis0 || !vis1 {
-		return
-	}
-
-	// Ensure correct screen ordering regardless of projection flip
-	if px0 > px1 {
-		px0, px1 = px1, px0
-	}
-	if py0 > py1 {
-		py0, py1 = py1, py0
-	}
-	sx0, sy0 := px0, py0
-
-	screenSprW := px1 - px0
-	screenSprH := py1 - py0
-	if screenSprW <= 0 || screenSprH <= 0 {
-		return
-	}
-
-	// Number of 8-pixel-wide character cells
-	widthCells := widthBytes // each byte is 8 pixels = 1 character cell
 	heightCells := (height + 7) / 8
 
-	for spy := 0; spy < screenSprH; spy++ {
-		sprRow := spy * height / screenSprH
-		if sprRow >= height {
-			sprRow = height - 1
-		}
-		rowStart := sprRow * widthBytes
+	// Base position in world coordinates
+	basePos := PixelToWorld(px, py)
 
-		for spx := 0; spx < screenSprW; spx++ {
-			sprCol := spx * widthPx / screenSprW
-			if sprCol >= widthPx {
-				sprCol = widthPx - 1
-			}
-
-			byteIdx := sprCol / 8
-			bitIdx := uint(7 - sprCol%8)
-			if rowStart+byteIdx >= len(pixels) || pixels[rowStart+byteIdx]&(1<<bitIdx) == 0 {
+	// For each sprite pixel, compute its world position on the wall and project
+	for row := 0; row < height; row++ {
+		for col := 0; col < widthPx; col++ {
+			byteIdx := col / 8
+			bitIdx := uint(7 - col%8)
+			if pixels[row*widthBytes+byteIdx]&(1<<bitIdx) == 0 {
 				continue
 			}
 
-			// Look up per-cell colour from attr data.
-			// Attr grid is painted UPWARD from the sprite's base position:
-			// attr row 0 = bottom cell row, increasing upward.
-			// Sprite row 0 = top of sprite. So we need to invert.
-			cellCol := sprCol / 8
-			cellRow := sprRow / 8
-			// Attr rows go bottom-up; sprite rows go top-down
+			// Compute world position of this pixel on the wall.
+			// Sprite row 0 = top, height-1 = bottom.
+			// In world: Y goes from wallHeight (top) to 0 (floor).
+			// The decoration's base Y position is at the sprite's bottom.
+			worldY := float32(height-row) / coordScale
+
+			// Horizontal offset: sprite column relative to base position
+			halfW := float32(widthPx) / 2
+			colOffset := (float32(col) - halfW) / coordScale
+
+			var worldPt Vec3
+			switch wall {
+			case WallNorth:
+				// On N wall: sprite spans in X, wall is at base Z
+				worldPt = Vec3{basePos.X + colOffset, worldY, basePos.Z}
+			case WallSouth:
+				// On S wall: sprite spans in X (mirrored), wall at base Z
+				worldPt = Vec3{basePos.X - colOffset, worldY, basePos.Z}
+			case WallWest:
+				// On W wall: sprite spans in Z, wall at base X
+				worldPt = Vec3{basePos.X, worldY, basePos.Z + colOffset}
+			case WallEast:
+				// On E wall: sprite spans in Z (mirrored), wall at base X
+				worldPt = Vec3{basePos.X, worldY, basePos.Z - colOffset}
+			default:
+				// Fallback: camera-facing at base position
+				worldPt = Vec3{basePos.X + colOffset, worldY, basePos.Z}
+			}
+
+			cs := cam.WorldToCamera(worldPt)
+			if cs.Z <= cam.Near {
+				continue
+			}
+			sx, sy, depth, vis := cam.Project(cs, screenW, screenH)
+			if !vis {
+				continue
+			}
+
+			// Per-cell colour
+			cellCol := col / 8
+			cellRow := row / 8
 			attrRow := heightCells - 1 - cellRow
+			colorIdx := attrColorForCell(attrs, attrW, attrH, cellCol, attrRow, widthBytes, roomAttr)
 
-			colorIdx := attrColorForCell(attrs, attrW, attrH, cellCol, attrRow, widthCells, roomAttr)
-
-			r.setPixel(sx0+spx, sy0+spy, cs.Z, colorIdx)
+			r.setPixel(sx, sy, depth, colorIdx)
 		}
 	}
 }
