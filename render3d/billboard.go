@@ -209,8 +209,20 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 	}
 	heightCells := (height + 7) / 8
 
-	// Entity position is the left edge of the sprite; centre it
-	basePos := PixelToWorld(px+widthPx/2, py)
+	// Entity (px, py) is the bottom-left of the displayed sprite.
+	// Centre offset depends on wall direction:
+	//   N/S walls: sprite spans X (along wall), so offset px by widthPx/2
+	//   E/W walls: sprite spans Y (along wall = Z in 3D), so offset py by widthPx/2 upward
+	var basePos Vec3
+	switch wall {
+	case WallEast, WallWest:
+		// px is the wall surface, py is bottom of displayed sprite.
+		// Displayed Y extent for rotated sprite is widthPx; centre is py - widthPx/2.
+		basePos = PixelToWorld(px, py-widthPx/2)
+	default:
+		// N/S walls (or default): px is left edge, centre is px + widthPx/2
+		basePos = PixelToWorld(px+widthPx/2, py)
+	}
 	halfW := float32(widthPx) / 2 / coordScale
 	topY := float32(height) / coordScale // top of sprite (standard Y-up)
 
