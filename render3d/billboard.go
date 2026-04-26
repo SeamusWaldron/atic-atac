@@ -297,9 +297,11 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 				continue
 			}
 
-			// Map UV to sprite pixel
+			// Map UV to sprite pixel.
+			// ZX Spectrum sprites are stored bottom-up: row 0 = bottom of sprite.
+			// v=0 is ceiling (top of screen), so invert to get correct row.
 			sprCol := int(u * float32(widthPx))
-			sprRow := int(v * float32(height))
+			sprRow := height - 1 - int(v*float32(height))
 			if sprCol < 0 { sprCol = 0 }
 			if sprRow < 0 { sprRow = 0 }
 			if sprCol >= widthPx { sprCol = widthPx - 1 }
