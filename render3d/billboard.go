@@ -247,13 +247,56 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 				continue
 			}
 
+			// Project the next pixel position to determine fill size
+			// This prevents "shredding" gaps at steep perspective angles
+			nextColOffset := (float32(col+1) - halfW) / coordScale
+			nextWorldY := -float32(height-row-1) / coordScale
+			var nextPt Vec3
+			switch wall {
+			case WallNorth:
+				nextPt = Vec3{basePos.X + nextColOffset, nextWorldY, basePos.Z}
+			case WallSouth:
+				nextPt = Vec3{basePos.X - nextColOffset, nextWorldY, basePos.Z}
+			case WallWest:
+				nextPt = Vec3{basePos.X, nextWorldY, basePos.Z + nextColOffset}
+			case WallEast:
+				nextPt = Vec3{basePos.X, nextWorldY, basePos.Z - nextColOffset}
+			default:
+				nextPt = Vec3{basePos.X + nextColOffset, nextWorldY, basePos.Z}
+			}
+			ncs := cam.WorldToCamera(nextPt)
+			nx, ny, _, nv := cam.Project(ncs, screenW, screenH)
+
 			// Per-cell colour
 			cellCol := col / 8
 			cellRow := row / 8
 			attrRow := heightCells - 1 - cellRow
 			colorIdx := attrColorForCell(attrs, attrW, attrH, cellCol, attrRow, widthBytes, roomAttr)
 
-			r.setPixel(sx, sy, depth, colorIdx)
+			// Fill a rectangle from (sx,sy) to (nx,ny) to cover gaps
+			if nv && ncs.Z > cam.Near {
+				fw := nx - sx
+				fh := ny - sy
+				if fw < 1 {
+					fw = 1
+				}
+				if fh < 1 {
+					fh = 1
+				}
+				if fw > 4 {
+					fw = 4
+				}
+				if fh > 4 {
+					fh = 4
+				}
+				for fy := 0; fy < fh; fy++ {
+					for fx := 0; fx < fw; fx++ {
+						r.setPixel(sx+fx, sy+fy, depth, colorIdx)
+					}
+				}
+			} else {
+				r.setPixel(sx, sy, depth, colorIdx)
+			}
 		}
 	}
 }
