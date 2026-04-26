@@ -287,7 +287,7 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, moun
 	switch mount {
 	case MountWallHung:
 		// Centre on upper portion of wall, like a hung picture
-		centre := float32(wallHeight * 0.65) // slightly above wall centre
+		centre := float32(wallHeight * 0.60) // slightly above wall centre
 		bottomY = centre - contentHeight/2
 		topY = centre + contentHeight/2
 	default: // MountFloor
@@ -447,7 +447,11 @@ func triUV(px, py, ax, ay, au, av, ainvz, bx, by, bu, bv, binvz, cx, cy, cu, cv,
 
 	// Note: division by denom naturally handles both windings — for inside
 	// points, w0/w1/w2 are always in [0..1] regardless of denom sign.
-	if w0 < -0.001 || w1 < -0.001 || w2 < -0.001 {
+	// Use a generous tolerance so pixels at the boundary edges (where the
+	// pixel centre is half a pixel outside the integer-truncated corner
+	// vertex) are still rendered, matching the wall-fill scanline coverage.
+	const tol = -0.05
+	if w0 < tol || w1 < tol || w2 < tol {
 		return 0, 0, 0, false
 	}
 
