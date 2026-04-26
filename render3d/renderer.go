@@ -65,7 +65,7 @@ func (r *Renderer) Render(s RenderState) []byte {
 	pos := PixelToWorld(int(s.PlayerX), int(s.PlayerY))
 	r.camera.TargetX = pos.X
 	r.camera.TargetZ = pos.Z
-	r.camera.Y = 0.5 // eye height (standard Y-up, midway up the 1.5-unit wall)
+	r.camera.Y = 0.75 // eye height (midpoint of 1.5-unit walls)
 	r.camera.Update()
 
 	w := r.raster.Width
