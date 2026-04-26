@@ -80,38 +80,78 @@ func (r *Renderer) Render(s RenderState) []byte {
 	w := r.raster.Width
 	h := r.raster.Height
 
-	// DEBUG: Wall markers — coloured dots at the centre of each wall
-	// Green=SOUTH (bottom, in front when facing down)
-	// Red=NORTH (top, behind when facing down)
-	// Cyan=WEST (left)  Yellow=EAST (right)
-	// Also floor/ceiling markers 3 units ahead
+	// DEBUG: Markers for walls, corners, floor and ceiling
+	// Wall centres: Green=SOUTH Red=NORTH Cyan=WEST Yellow=EAST
+	// Corners: White dots where walls meet
+	// Floor/Ceiling: Magenta=floor, Bright white=ceiling (3 units ahead)
 	{
 		ra := data.RoomAttrs[s.Room]
 		style := data.RoomStyles[ra.Style]
-		rw := float32(style.Width) // half-size of playable area in pixels
+		rw := float32(style.Width)
 		rh := float32(style.Height)
-		// Wall centres in pixel coords (inner boundary approx)
-		wallMarkers := []struct{ name string; px,py float32; color byte }{
-			{"SOUTH", float32(roomCentreX), float32(roomCentreY)+rh, 4},   // green
-			{"NORTH", float32(roomCentreX), float32(roomCentreY)-rh, 2},   // red
-			{"WEST",  float32(roomCentreX)-rw, float32(roomCentreY), 5},   // cyan
-			{"EAST",  float32(roomCentreX)+rw, float32(roomCentreY), 6},   // yellow
+
+		type marker struct { name string; x,y,z float32; color byte }
+		markers := []marker{
+			// Wall centres at mid-height
+			{"SOUTH", float32(roomCentreX), 0.75, float32(roomCentreY) + rh, 4},       // green
+			{"NORTH", float32(roomCentreX), 0.75, float32(roomCentreY) - rh, 2},       // red
+			{"WEST", float32(roomCentreX) - rw, 0.75, float32(roomCentreY), 5},        // cyan
+			{"EAST", float32(roomCentreX) + rw, 0.75, float32(roomCentreY), 6},        // yellow
+			// Corners at mid-height (where walls meet)
+			{"NW", float32(roomCentreX) - rw, 0.75, float32(roomCentreY) - rh, 15},    // bright white
+			{"NE", float32(roomCentreX) + rw, 0.75, float32(roomCentreY) - rh, 15},
+			{"SW", float32(roomCentreX) - rw, 0.75, float32(roomCentreY) + rh, 15},
+			{"SE", float32(roomCentreX) + rw, 0.75, float32(roomCentreY) + rh, 15},
 		}
-		for _, wm := range wallMarkers {
-			wpos := PixelToWorld(int(wm.px), int(wm.py))
-			wpos.Y = 0.75 // mid-wall height
+
+		for _, m := range markers {
+			wpos := PixelToWorld(int(m.x), int(m.z))
+			wpos.Y = m.y
 			cs := r.camera.WorldToCamera(wpos)
 			sx, sy, _, vis := r.camera.Project(cs, w, h)
 			if vis {
-				for dy := -3; dy <= 3; dy++ {
-					for dx := -3; dx <= 3; dx++ {
-						r.raster.setPixel(sx+dx, sy+dy, 0.01, wm.color)
+				sz := 3
+				if m.color == 15 { sz = 2 } // smaller for corners
+				for dy := -sz; dy <= sz; dy++ {
+					for dx := -sz; dx <= sz; dx++ {
+						r.raster.setPixel(sx+dx, sy+dy, 0.01, m.color)
 					}
 				}
 			}
 			if r.debugFrame%250 == 1 && vis {
-				fmt.Printf("  WALL %s: pixel=(%.0f,%.0f) world=(%.2f,%.2f) screen=(%d,%d)\n",
-					wm.name, wm.px, wm.py, wpos.X, wpos.Z, sx, sy)
+				fmt.Printf("  %s: pixel=(%.0f,%.0f) screen=(%d,%d)\n", m.name, m.x, m.z, sx, sy)
+			}
+		}
+
+		// Floor and ceiling markers 3 units directly ahead
+		fwdX := r.camera.X + 3*r.camera.sinYaw
+		fwdZ := r.camera.Z + 3*r.camera.cosYaw
+		// Floor (Y=0)
+		csF := r.camera.WorldToCamera(Vec3{fwdX, 0, fwdZ})
+		sxF, syF, _, visF := r.camera.Project(csF, w, h)
+		if visF {
+			for dy := -2; dy <= 2; dy++ {
+				for dx := -2; dx <= 2; dx++ {
+					r.raster.setPixel(sxF+dx, syF+dy, 0.01, 3) // magenta = floor
+				}
+			}
+		}
+		// Ceiling (Y=wallHeight)
+		csC := r.camera.WorldToCamera(Vec3{fwdX, wallHeight, fwdZ})
+		sxC, syC, _, visC := r.camera.Project(csC, w, h)
+		if visC {
+			for dy := -2; dy <= 2; dy++ {
+				for dx := -2; dx <= 2; dx++ {
+					r.raster.setPixel(sxC+dx, syC+dy, 0.01, 15) // bright white = ceiling
+				}
+			}
+		}
+		if r.debugFrame%250 == 1 {
+			if visF {
+				fmt.Printf("  FLOOR ahead: screen=(%d,%d)\n", sxF, syF)
+			}
+			if visC {
+				fmt.Printf("  CEILING ahead: screen=(%d,%d)\n", sxC, syC)
 			}
 		}
 	}
