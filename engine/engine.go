@@ -218,11 +218,18 @@ func (g *GameEnv) SetPlayerDir(dir int) { g.playerDir = dir }
 
 // ClearLastMovement zeros the last-movement deltas. The weapon firing code
 // uses lastDX/lastDY when non-zero, falling back to playerDir otherwise.
-// 3D mode calls this each frame so the weapon fires in the camera direction
-// (via playerDir) rather than the stale last-2D-movement direction.
 func (g *GameEnv) ClearLastMovement() {
 	g.lastDX = 0
 	g.lastDY = 0
+}
+
+// SetLastMovement sets the last-movement deltas (used by 3D mode to enable
+// diagonal weapon fire matching the camera yaw direction). Sign convention:
+//   dx > 0 = east, dx < 0 = west
+//   dy > 0 = south, dy < 0 = north
+func (g *GameEnv) SetLastMovement(dx, dy int) {
+	g.lastDX = dx
+	g.lastDY = dy
 }
 
 // WeaponState reports the current weapon's position, sprite, and colour.
