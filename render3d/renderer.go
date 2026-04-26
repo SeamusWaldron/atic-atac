@@ -231,13 +231,30 @@ func (r *Renderer) Render(s RenderState) []byte {
 func (r *Renderer) renderDecorations(s RenderState, w, h int) {
 	roomAttr := data.RoomAttrs[s.Room].Colour
 
-	// Get wall boundary positions from room style
+	// Get wall surface positions from the inner boundary points.
+	// style.Width/Height are collision bounds, not wall positions — use the
+	// actual inner-boundary point min/max instead.
 	ra := data.RoomAttrs[s.Room]
 	style := data.RoomStyles[ra.Style]
-	wallNorthPx := int(roomCentreY) - int(style.Height) // pixel Y of north wall
-	wallSouthPx := int(roomCentreY) + int(style.Height)
-	wallWestPx := int(roomCentreX) - int(style.Width)
-	wallEastPx := int(roomCentreX) + int(style.Width)
+	innerStart := len(style.Points) / 2
+	wallWestPx, wallEastPx := 255, 0
+	wallNorthPx, wallSouthPx := 255, 0
+	for i := innerStart; i < len(style.Points); i++ {
+		p := style.Points[i]
+		px, py := int(p.X), int(p.Y)
+		if px < wallWestPx {
+			wallWestPx = px
+		}
+		if px > wallEastPx {
+			wallEastPx = px
+		}
+		if py < wallNorthPx {
+			wallNorthPx = py
+		}
+		if py > wallSouthPx {
+			wallSouthPx = py
+		}
+	}
 
 	entities := data.GenRoomEntityData[int(s.Room)]
 	for _, pair := range entities {
@@ -294,6 +311,23 @@ func (r *Renderer) renderDecorations(s RenderState, w, h int) {
 		case WallEast:
 			drawX = wallEastPx
 		}
+
+		if r.debugFrame%250 == 2 {
+			wallName := "?"
+			switch wall {
+			case WallNorth:
+				wallName = "N"
+			case WallSouth:
+				wallName = "S"
+			case WallWest:
+				wallName = "W"
+			case WallEast:
+				wallName = "E"
+			}
+			fmt.Printf("    deco type=0x%02X pos=(%d,%d)→(%d,%d) wall=%s mode=%d\n",
+				typeID, x, y, drawX, drawY, wallName, mode)
+		}
+
 		RenderWallDecoration(r.raster, &r.camera, drawX, drawY, wall, sprData, attrData, roomAttr, w, h)
 	}
 }
