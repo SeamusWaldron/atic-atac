@@ -39,8 +39,9 @@ func SpriteLookup(e *entity.Entity) []byte {
 func RenderSpriteBillboard(r *Raster, cam *Camera, e *entity.Entity, screenW, screenH int) {
 	sprData := SpriteLookup(e)
 
-	// Entity world position
-	pos := PixelToWorld(e.X, e.Y)
+	// Entity world position — offset to sprite centre
+	// Engine position is bottom-left of sprite; centre it horizontally
+	pos := PixelToWorld(e.X+8, e.Y)
 
 	// Entity colour
 	ink := e.Attr & 0x07
@@ -207,7 +208,8 @@ func RenderWallDecoration(r *Raster, cam *Camera, px, py int, wall WallDir, sprD
 	}
 	heightCells := (height + 7) / 8
 
-	basePos := PixelToWorld(px, py)
+	// Entity position is the left edge of the sprite; centre it
+	basePos := PixelToWorld(px+widthPx/2, py)
 	halfW := float32(widthPx) / 2 / coordScale
 	topY := float32(height) / coordScale // top of sprite (standard Y-up)
 
