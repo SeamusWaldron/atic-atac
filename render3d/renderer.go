@@ -2,6 +2,7 @@ package render3d
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/seamuswaldron/aticatac/data"
 	"github.com/seamuswaldron/aticatac/entity"
@@ -297,6 +298,32 @@ func (r *Renderer) renderDecorations(s RenderState, w, h int) {
 
 		// Determine which wall this decoration is on from its rotation mode
 		wall := WallFromMode(mode, x, y)
+
+		// Back-face culling: skip decorations on walls that face away from the camera.
+		// Wall normals point INTO the room (away from the wall surface):
+		//   N wall: normal = +Z, visible when cos(yaw) < 0 (camera looks toward -Z, north)
+		//   S wall: normal = -Z, visible when cos(yaw) > 0 (camera looks toward +Z, south)
+		//   E wall: normal = -X, visible when sin(yaw) < 0 (camera looks toward +X, east)
+		//   W wall: normal = +X, visible when sin(yaw) > 0 (camera looks toward -X, west)
+		// Forward F = (-sin yaw, 0, cos yaw); render if F·normal < 0.
+		camS := float32(math.Sin(float64(r.camera.Yaw)))
+		camC := float32(math.Cos(float64(r.camera.Yaw)))
+		visible := false
+		switch wall {
+		case WallNorth:
+			visible = camC < 0
+		case WallSouth:
+			visible = camC > 0
+		case WallEast:
+			visible = camS < 0
+		case WallWest:
+			visible = camS > 0
+		default:
+			visible = true
+		}
+		if !visible {
+			continue
+		}
 
 		// Snap decoration depth to the wall surface so its floor line
 		// aligns with the wall wireframe
