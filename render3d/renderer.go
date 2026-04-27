@@ -33,6 +33,9 @@ type Renderer struct {
 	camera     Camera
 	rgbaOut    []byte
 	debugFrame int
+	// ShowMarkers draws coloured debug markers at wall centres, corners, and
+	// the floor/ceiling 3 units ahead. Off by default; flip to re-enable.
+	ShowMarkers bool
 }
 
 // NewRenderer creates a new 3D renderer.
@@ -92,7 +95,7 @@ func (r *Renderer) Render(s RenderState) []byte {
 	// Wall centres: Green=SOUTH Red=NORTH Cyan=WEST Yellow=EAST
 	// Corners: White dots where walls meet
 	// Floor/Ceiling: Magenta=floor, Bright white=ceiling (3 units ahead)
-	{
+	if r.ShowMarkers {
 		ra := data.RoomAttrs[s.Room]
 		style := data.RoomStyles[ra.Style]
 		rw := float32(style.Width)
