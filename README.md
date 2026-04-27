@@ -2,6 +2,8 @@
 
 A faithful Go replication of Atic Atac (1983, Ultimate Play the Game) for the ZX Spectrum, built from the Z80 disassembly by Simon Owen ("obo") at [mrcook/zx-spectrum-games](https://github.com/mrcook/zx-spectrum-games/tree/master/atic-atac).
 
+![Atic Atac demo](media/atic-atac-demo.gif)
+
 ## Status
 
 **Playable.** The full 2D game is implemented: all 150 rooms, three character classes (Knight, Wizard, Serf), all enemy types, bosses (Mummy, Dracula, Frankenstein, Devil, Hunchback), pickups, keys, doors, secret passages, trap doors, weapons, scoring, and the win condition (escape with all three ACG key pieces).
