@@ -79,7 +79,7 @@ func (r *Renderer) Render(s RenderState) []byte {
 	pos := PixelToWorld(int(s.PlayerX), int(s.PlayerY))
 	r.camera.TargetX = pos.X
 	r.camera.TargetZ = pos.Z
-	r.camera.Y = 0.75 // eye height (midpoint of 1.5-unit walls)
+	r.camera.Y = 0.7125 // eye height (5% below wall midpoint of 0.75)
 	r.camera.Update()
 
 	if r.debugFrame%50 == 0 {
