@@ -91,17 +91,29 @@ func RenderSpriteBillboard(r *Raster, cam *Camera, e *entity.Entity, screenW, sc
 	worldW := float32(sprWidthPx) / coordScale
 	worldH := float32(sprHeight) / coordScale
 
-	// Anchor the lowest non-empty sprite row to the floor (Y=0). Without
-	// this, tall sprites with sparse bottom rows (notably the bosses) appear
-	// to float — the screen rect spans the full billboard but the visible
-	// feet pixels start several rows above row 0.
-	contentBottom := 0
-	for row := 0; row < sprHeight; row++ {
+	// Anchor the lowest dense sprite row to the floor (Y=0). Without this,
+	// tall sprites with stray pixels in their bottom rows (notably Dracula's
+	// row-0 cape tip) would pin those few pixels to the floor and leave the
+	// actual figure floating above. Require at least two consecutive rows
+	// at >=25% density to skip past sparse outliers.
+	rowDensity := func(row int) int {
 		off := 1 + row*2
 		if off+1 >= len(sprData) {
-			break
+			return 0
 		}
-		if sprData[off] != 0 || sprData[off+1] != 0 {
+		count := 0
+		for _, b := range []byte{sprData[off], sprData[off+1]} {
+			for b != 0 {
+				count += int(b & 1)
+				b >>= 1
+			}
+		}
+		return count
+	}
+	threshold := sprWidthPx / 4 // 4 px for the standard 16-wide sprite
+	contentBottom := 0
+	for row := 0; row < sprHeight-1; row++ {
+		if rowDensity(row) >= threshold && rowDensity(row+1) >= threshold {
 			contentBottom = row
 			break
 		}
