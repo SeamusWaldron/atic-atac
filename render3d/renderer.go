@@ -495,10 +495,15 @@ func (r *Renderer) renderFloorDecorations(s RenderState, w, h int) {
 		spriteH := int(sprData[1])
 		widthPx := widthBytes * 8
 
-		// Build a flat quad on the floor centred at (x+widthPx/2, y-spriteH/2)
-		// (entity y is bottom of displayed sprite in 2D top-down).
-		centreX := x + widthPx/2
-		centreY := y - spriteH/2
+		// Centre the floor quad on the entity's stored (x, y) — that's the
+		// point checkTrapDoor uses for collision, so walking onto the visible
+		// quad lines up with the trigger zone. (The 2D top-down draws the
+		// sprite upward from (x, y) — that anchoring made sense in top-down
+		// where the player sprite is also bottom-left referenced, but in 3D
+		// the user has no easy way to tell where the trigger sits, so anchor
+		// the visual to the collision point instead.)
+		centreX := x
+		centreY := y
 		halfW := float32(widthPx) / 2 / coordScale
 		halfD := float32(spriteH) / 2 / coordScale
 		basePos := PixelToWorld(centreX, centreY)
