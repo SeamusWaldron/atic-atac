@@ -572,18 +572,10 @@ func (r *Renderer) renderFloorDecorations(s RenderState, w, h int) {
 			maxY = h - 1
 		}
 
-		// Open trap doors render as a dark hole rather than the cross-hatch
-		// sprite — matches the visual cue that you can fall through.
-		openHole := typeID == 0x19
-
 		for sy := minY; sy <= maxY; sy++ {
 			for sx := minX; sx <= maxX; sx++ {
 				u, v, depth, inside := quadUV(float32(sx)+0.5, float32(sy)+0.5, pv)
 				if !inside {
-					continue
-				}
-				if openHole {
-					r.raster.setPixel(sx, sy, depth-0.005, 0) // black hole
 					continue
 				}
 				sprCol := int(u * float32(widthPx))
