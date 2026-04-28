@@ -91,10 +91,22 @@ func RenderSpriteBillboard(r *Raster, cam *Camera, e *entity.Entity, screenW, sc
 	worldW := float32(sprWidthPx) / coordScale
 	worldH := float32(sprHeight) / coordScale
 
-	// Billboard centre Y — standard Y-up (positive = up from floor).
-	// Offset down by 0.10 so creatures appear lower (feet on floor instead
-	// of floating slightly above).
-	centreY := worldH/2 - 0.10
+	// Anchor the lowest non-empty sprite row to the floor (Y=0). Without
+	// this, tall sprites with sparse bottom rows (notably the bosses) appear
+	// to float — the screen rect spans the full billboard but the visible
+	// feet pixels start several rows above row 0.
+	contentBottom := 0
+	for row := 0; row < sprHeight; row++ {
+		off := 1 + row*2
+		if off+1 >= len(sprData) {
+			break
+		}
+		if sprData[off] != 0 || sprData[off+1] != 0 {
+			contentBottom = row
+			break
+		}
+	}
+	centreY := worldH/2 - float32(contentBottom)*worldH/float32(sprHeight)
 
 	// Project two corners of the billboard to get screen extent
 	c0 := Vec3{cs.X - worldW/2, centreY - worldH/2, cs.Z}
