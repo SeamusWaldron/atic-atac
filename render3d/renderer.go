@@ -24,6 +24,10 @@ type RenderState struct {
 	WeaponY       int
 	WeaponGraphic byte
 	WeaponAttr    byte
+
+	// DoorType returns the runtime door state for (room, entityIdx).
+	// Used to pick open vs closed door sprites; nil-safe.
+	DoorType func(room byte, entityIdx int) byte
 }
 
 // Renderer is the 3D rendering engine.
@@ -283,7 +287,7 @@ func (r *Renderer) renderDecorations(s RenderState, w, h int) {
 	}
 
 	entities := data.GenRoomEntityData[int(s.Room)]
-	for _, pair := range entities {
+	for ei, pair := range entities {
 		// Find the side matching this room
 		var e [8]byte
 		if pair[1] == s.Room {
@@ -313,6 +317,23 @@ func (r *Renderer) renderDecorations(s RenderState, w, h int) {
 		gfxIdx := typeID - 1
 		if gfxIdx < 0 || gfxIdx >= 39 {
 			continue
+		}
+
+		// Apply runtime door state (mirrors engine.drawDecorations logic).
+		// Without this, closed doors render as the open arch sprite.
+		if s.DoorType != nil {
+			rt := s.DoorType(s.Room, ei)
+			if rt != 0 {
+				if rt == 0x18 || rt == 0x19 {
+					gfxIdx = int(rt) - 1
+				} else if rt == 0x02 || (rt >= 0x20 && rt&0x01 != 0) {
+					if typeID >= 0x08 && typeID <= 0x0F {
+						gfxIdx = 1
+					}
+				} else if rt >= 0x20 && rt&0x01 == 0 {
+					gfxIdx = 31
+				}
+			}
 		}
 		// Skip chicken sprites (HUD energy bar, not room decor)
 		if gfxIdx == 18 || gfxIdx == 19 {
@@ -510,28 +531,85 @@ func (r *Renderer) renderFloorDecorations(s RenderState, w, h int) {
 			continue
 		}
 
-		// Determine fill colour from room attribute
-		ink := roomAttr & 0x07
-		bright := (roomAttr >> 6) & 0x01
-		colorIdx := ink + bright*8
-		if typeID == 0x19 {
-			// Open trap door: dark hole
-			colorIdx = 0
+		// Texture-map the trap door sprite onto the floor quad.
+		// Corner UV mapping (matches quadUV expectations):
+		//   c0=BL(u=0,v=1), c1=BR(u=1,v=1), c2=TR(u=1,v=0), c3=TL(u=0,v=0)
+		sprPixels := sprData[2:]
+		attrs := data.GenDecoAttrs[gfxIdx] // may be nil
+		attrW, attrH := 0, 0
+		if attrs != nil && len(attrs) >= 2 {
+			attrW = int(attrs[0])
+			attrH = int(attrs[1])
 		}
 
-		// Fill quad as 2 triangles
-		v0 := ScreenVert{float32(pv[0].sx), float32(pv[0].sy), pv[0].depth - 0.005}
-		v1 := ScreenVert{float32(pv[1].sx), float32(pv[1].sy), pv[1].depth - 0.005}
-		v2 := ScreenVert{float32(pv[2].sx), float32(pv[2].sy), pv[2].depth - 0.005}
-		v3 := ScreenVert{float32(pv[3].sx), float32(pv[3].sy), pv[3].depth - 0.005}
-		r.raster.FillQuad(v0, v1, v2, v3, colorIdx)
+		// Screen bounding box for the projected quad
+		minX, maxX := pv[0].sx, pv[0].sx
+		minY, maxY := pv[0].sy, pv[0].sy
+		for i := 1; i < 4; i++ {
+			if pv[i].sx < minX {
+				minX = pv[i].sx
+			}
+			if pv[i].sx > maxX {
+				maxX = pv[i].sx
+			}
+			if pv[i].sy < minY {
+				minY = pv[i].sy
+			}
+			if pv[i].sy > maxY {
+				maxY = pv[i].sy
+			}
+		}
+		if minX < 0 {
+			minX = 0
+		}
+		if minY < 0 {
+			minY = 0
+		}
+		if maxX >= w {
+			maxX = w - 1
+		}
+		if maxY >= h {
+			maxY = h - 1
+		}
 
-		// Draw outline edges
-		edgeColor := byte(2) // red
-		for j := 0; j < 4; j++ {
-			k := (j + 1) % 4
-			r.raster.DrawLine(pv[j].sx, pv[j].sy, pv[j].depth-0.01,
-				pv[k].sx, pv[k].sy, pv[k].depth-0.01, edgeColor)
+		// Open trap doors render as a dark hole rather than the cross-hatch
+		// sprite — matches the visual cue that you can fall through.
+		openHole := typeID == 0x19
+
+		for sy := minY; sy <= maxY; sy++ {
+			for sx := minX; sx <= maxX; sx++ {
+				u, v, depth, inside := quadUV(float32(sx)+0.5, float32(sy)+0.5, pv)
+				if !inside {
+					continue
+				}
+				if openHole {
+					r.raster.setPixel(sx, sy, depth-0.005, 0) // black hole
+					continue
+				}
+				sprCol := int(u * float32(widthPx))
+				sprRow := int(v * float32(spriteH))
+				if sprCol < 0 {
+					sprCol = 0
+				}
+				if sprRow < 0 {
+					sprRow = 0
+				}
+				if sprCol >= widthPx {
+					sprCol = widthPx - 1
+				}
+				if sprRow >= spriteH {
+					sprRow = spriteH - 1
+				}
+				byteIdx := sprCol / 8
+				bitIdx := uint(7 - sprCol%8)
+				if sprPixels[sprRow*widthBytes+byteIdx]&(1<<bitIdx) == 0 {
+					continue
+				}
+				cellCol := sprCol / 8
+				cellRow := sprRow / 8
+				colorIdx := attrColorForCell(attrs, attrW, attrH, cellCol, cellRow, widthBytes, roomAttr)
+				r.raster.setPixel(sx, sy, depth-0.005, colorIdx)
+			}
 		}
 	}
 }

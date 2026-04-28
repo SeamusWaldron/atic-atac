@@ -362,6 +362,7 @@ func (g *Game) Draw(scr *ebiten.Image) {
 			WeaponY:       wy,
 			WeaponGraphic: wgfx,
 			WeaponAttr:    wattr,
+			DoorType:      g.eng.DoorType,
 		}
 		pixels3d := g.renderer3d.Render(rs)
 		// Copy only the play area (192 pixels wide) from the 3D buffer

@@ -1138,6 +1138,12 @@ func (g *GameEnv) getDoorType(room byte, entityIdx int) byte {
 	return 0 // not a managed door
 }
 
+// DoorType is the public accessor for the runtime door type, used by the
+// 3D renderer so it can pick the correct open vs closed sprite.
+func (g *GameEnv) DoorType(room byte, entityIdx int) byte {
+	return g.getDoorType(room, entityIdx)
+}
+
 // isDoorOpenRuntime checks if a door is open using the runtime type.
 // Z80: bit 0 of type = 1 means open, 0 means closed.
 func (g *GameEnv) isDoorOpenRuntime(room byte, entityIdx int) bool {

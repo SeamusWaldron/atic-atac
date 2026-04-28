@@ -21,9 +21,24 @@ func SpriteLookup(e *entity.Entity) []byte {
 	if e.Type == entity.TypeExplosion {
 		return data.PopFrames(int(e.Frame >> 2))
 	}
+	// Creatures: pick one of two animation frames based on Frame bit 3.
+	// Engine doesn't store this in e.Graphic, so look it up by kind (Timer).
+	if e.Type == entity.TypeCreature {
+		f1, f2 := data.CreatureSpriteFrames(int(e.Timer))
+		if e.Frame&0x08 == 0 {
+			return f1
+		}
+		return f2
+	}
 	graphicID := int(e.Graphic)
 	if graphicID == 0 {
 		return nil
+	}
+	// Bosses cycle through 4 animation frames offset from their base graphic
+	// (Z80 base + (frame_counter & $03)).
+	if e.Type == entity.TypeBoss {
+		animFrame := int(e.Frame>>2) & 0x03
+		graphicID += animFrame
 	}
 	// Graphic IDs are 1-based: flatIdx = graphicID - 1
 	flatIdx := graphicID - 1
