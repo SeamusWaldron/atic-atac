@@ -1350,21 +1350,44 @@ func (g *GameEnv) updateBosses() {
 			}
 
 		case entity.BossDracula:
-			// Z80 h_dracula at $8906: chase player, flee crucifix, room hop
-			if e.X < px { e.X += speed } else if e.X > px { e.X -= speed }
-			if e.Y < py { e.Y += speed } else if e.Y > py { e.Y -= speed }
+			// Z80 h_dracula at $8906. Two key behaviours that we previously
+			// got wrong:
+			//   1. Room-hopping ($8952) only happens when Dracula is NOT in
+			//      the player's room — that's how he travels to it. While
+			//      he's chasing in the player's room, no hop. We were
+			//      hopping every 50 frames unconditionally, so he kept
+			//      vanishing mid-chase.
+			//   2. Crucifix flee ($891F-$892C) negates the 1x chase
+			//      velocity, not 3x.
+			hasCrucifix := false
 			for _, slot := range g.inventory {
 				if slot.Occupied && slot.Name == "CRUCIX" {
-					if e.X < px { e.X -= speed * 3 } else { e.X += speed * 3 }
-					if e.Y < py { e.Y -= speed * 3 } else { e.Y += speed * 3 }
+					hasCrucifix = true
 					break
 				}
 			}
-			if e.Frame%50 == 0 {
-				newRoom := g.nextRand()
-				if int(newRoom) < data.NumRooms && newRoom != g.room {
-					ra := data.RoomAttrs[newRoom]
-					if ra.Style < 3 { e.Room = newRoom }
+			if hasCrucifix {
+				// Flee: chase velocity, negated.
+				if e.X < px { e.X -= speed } else if e.X > px { e.X += speed }
+				if e.Y < py { e.Y -= speed } else if e.Y > py { e.Y += speed }
+			} else if e.Room == g.room {
+				// In player's room: chase. No hop this frame.
+				if e.X < px { e.X += speed } else if e.X > px { e.X -= speed }
+				if e.Y < py { e.Y += speed } else if e.Y > py { e.Y -= speed }
+			} else {
+				// Not in player's room: drift toward room centre and hop
+				// to a new random square room every ~50 frames.
+				const centre = roomCentreX
+				if e.X < centre { e.X += speed } else if e.X > centre { e.X -= speed }
+				if e.Y < centre { e.Y += speed } else if e.Y > centre { e.Y -= speed }
+				if e.Frame%50 == 0 {
+					newRoom := g.nextRand() & 0x7F // Z80: random 7-bit room
+					if int(newRoom) < data.NumRooms && newRoom != g.room {
+						ra := data.RoomAttrs[newRoom]
+						if ra.Style < 3 {
+							e.Room = newRoom
+						}
+					}
 				}
 			}
 
