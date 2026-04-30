@@ -120,3 +120,14 @@ func (p *Pool) ForEachInRoom(room byte, fn func(e *Entity)) {
 		}
 	}
 }
+
+// ForEach calls fn for every active entity, regardless of room.
+// Used by handlers (e.g. boss AI) that the Z80 ticks globally.
+func (p *Pool) ForEach(fn func(e *Entity)) {
+	for i := range p.Entities {
+		e := &p.Entities[i]
+		if e.Active {
+			fn(e)
+		}
+	}
+}

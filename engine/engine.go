@@ -1312,11 +1312,15 @@ func (g *GameEnv) updateCreatures() {
 }
 
 // updateBosses updates boss creature AI each frame.
+// The Z80 dispatches boss handlers globally (every frame, regardless of
+// player's room), which is how Dracula room-hops in the background and
+// the Mummy can chase the leaf into a different room. Iterate the whole
+// entity pool here, not just the player's current room.
 func (g *GameEnv) updateBosses() {
 	px := int(g.playerX)
 	py := int(g.playerY)
 
-	g.entities.ForEachInRoom(g.room, func(e *entity.Entity) {
+	g.entities.ForEach(func(e *entity.Entity) {
 		if e.Type != entity.TypeBoss {
 			return
 		}
